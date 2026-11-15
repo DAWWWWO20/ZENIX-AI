@@ -1,4 +1,4 @@
-﻿    const path = require("path");
+    const path = require("path");
     const fs = require("fs");
     const express = require("express");
     const dotenv = require("dotenv");
@@ -1563,15 +1563,28 @@ ${(memory.devices || []).join("\n")}
             }
         );
 
-        const data = await response.json();
+       const responseText = await response.text();
 
-        if (!response.ok) {
-            console.error("GEMINI ERROR:", data);
+let data;
 
-            return res.status(response.status).json({
-                error: data.error?.message || "Gemini API error"
-            });
-        }
+try {
+    data = JSON.parse(responseText);
+} catch (error) {
+    console.error("GEMINI NON-JSON RESPONSE:", responseText);
+
+    return res.status(502).json({
+        error: "Gemini returned HTML or invalid JSON."
+    });
+}
+
+       if (!response.ok) {
+    console.error("GEMINI ERROR:", data);
+
+    return res.status(502).json({
+        error: data.error?.message || "Gemini API error",
+        status: response.status
+    });
+}
 
         const reply = data.candidates?.[0]?.content?.parts
             ?.map(part => part.text || "")
