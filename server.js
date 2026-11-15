@@ -6,8 +6,31 @@
     dotenv.config({ override: true });
 
     const app = express();
-    const PORT = 3000;
 
+app.use((req, res, next) => {
+    res.header(
+        "Access-Control-Allow-Origin",
+        "https://dawwwwo20.github.io"
+    );
+
+    res.header(
+        "Access-Control-Allow-Methods",
+        "GET, POST, PUT, DELETE, OPTIONS"
+    );
+
+    res.header(
+        "Access-Control-Allow-Headers",
+        "Content-Type, Authorization"
+    );
+
+    if (req.method === "OPTIONS") {
+        return res.sendStatus(204);
+    }
+
+    next();
+});
+
+const PORT = process.env.PORT || 3000;
     const MEMORY_FILE = path.join(__dirname, "memory.json");
     const MEMORY_TEMP_FILE = MEMORY_FILE + ".tmp";
     const MEMORY_BACKUP_FILE = MEMORY_FILE + ".backup";
