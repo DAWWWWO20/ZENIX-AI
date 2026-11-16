@@ -1,11 +1,34 @@
-    const path = require("path");
-    const fs = require("fs");
-    const express = require("express");
-    const dotenv = require("dotenv");
 
-    dotenv.config({ override: true });
+/* =====================================================
+   ZENIX AI — COMPLETE SERVER
+   Unified Memory + Gemini + Google News
+===================================================== */
 
-    const app = express();
+const path = require("path");
+const fs = require("fs");
+const express = require("express");
+const dotenv = require("dotenv");
+
+dotenv.config({ override: true });
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+const MEMORY_DIR = path.resolve(
+    process.env.MEMORY_DIR || __dirname
+);
+
+const MEMORY_FILE = path.join(MEMORY_DIR, "memory.json");
+const MEMORY_TEMP_FILE = MEMORY_FILE + ".tmp";
+const MEMORY_BACKUP_FILE = MEMORY_FILE + ".backup";
+
+const GEMINI_MODEL =
+    process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+
+const GEMINI_URL =
+    "https://generativelanguage.googleapis.com/v1beta/models/" +
+    GEMINI_MODEL +
+    ":generateContent?key=";
 
 app.use((req, res, next) => {
     res.header(
@@ -30,1342 +53,2245 @@ app.use((req, res, next) => {
     next();
 });
 
-const PORT = process.env.PORT || 3000;
-    const MEMORY_FILE = path.join(__dirname, "memory.json");
-    const MEMORY_TEMP_FILE = MEMORY_FILE + ".tmp";
-    const MEMORY_BACKUP_FILE = MEMORY_FILE + ".backup";
+app.use(express.json({ limit: "15mb" }));
 
-    app.use(express.json({ limit: "15mb" }));
-    app.use(express.static(__dirname));
-
-    app.get("/", (req, res) => {
-        res.sendFile(path.join(__dirname, "index.html"));
-    });
-
-    app.get("/cods.js", (req, res) => {
-        res.sendFile(path.join(__dirname, "cods.js"));
-    });
-
-    // ==========================================
-    // LANGUAGE REPLIES
-    // ==========================================
-
-    function reply(armenian, russian, english, language = "Armenian") {
-        const lang = String(language || "").toLowerCase();
-
-        if (lang.startsWith("russian") || lang === "ru") return russian;
-        if (lang.startsWith("english") || lang === "en") return english;
-
-        return armenian;
+// Պաշտպանում ենք հիշողության ֆայլերը հանրային հասանելիությունից։
+app.use((req, res, next) => {
+    if (/^\/memory\.json(?:\.tmp|\.backup)?$/i.test(req.path)) {
+        return res.sendStatus(404);
     }
 
-    // ==========================================
-    // MEMORY STRUCTURE
-    // ==========================================
+    next();
+});
 
-  
+app.use(express.static(__dirname));
+
+/* =====================================================
+   LANGUAGE
+===================================================== */
+
+function reply(armenian, russian, english, language = "Armenian") {
+    const lang = String(language || "").toLowerCase();
+
+    if (lang.startsWith("ru") || lang.startsWith("russian")) {
+        return russian;
+    }
+
+    if (lang.startsWith("en") || lang.startsWith("english")) {
+        return english;
+    }
+
+    return armenian;
+}
+
+/* =====================================================
+   MEMORY STRUCTURE
+===================================================== */
+
+function armenianTransliterate(value) {
+    let text = String(value || "").normalize("NFC").trim();
+
+    const dictionary = {
+          im: "իմ",
+        du: "դու",
+        qo: "քո",
+        sireli: "սիրելի",
+        sirac: "սիրած",
+
+        hishir: "հիշիր",
+        hishum: "հիշում",
+        sirum: "սիրում",
+        xaghy: "խաղը",
+        xagh: "խաղ",
+        guyny: "գույնը",
+        guyn: "գույն",
+        kapuyt: "կապույտ",
+        sev: "սև",
+        karmir: "կարմիր",
+        deghin: "դեղին",
+        kanach: "կանաչ",
+
+        mirg: "միրգ",
+        mirgy: "միրգը",
+        banan: "բանան",
+        xndzor: "խնձոր",
+
+        meqena: "մեքենա",
+        meqenan: "մեքենան",
+        kendani: "կենդանի",
+        katu: "կատու",
+        shun: "շուն",
+
+        sport: "սպորտ",
+        sportadze: "սպորտաձև",
+        sportadzev: "սպորտաձև",
+        box: "բոքս",
+        futbol: "ֆուտբոլ",
+
+        ashun: "աշուն",
+        ashuny: "աշունը",
+
+        e: "է",
+        em: "եմ",
+        es: "ես",
+        en: "են",
+        chi: "չի",
+        che: "չէ",
+        inch: "ինչ",
+        vor: "որ"
+    };
+
+    const map = {
+        sh: "շ",
+        ch: "չ",
+        ts: "ց",
+        dz: "ձ",
+        gh: "ղ",
+        kh: "խ",
+        zh: "ժ",
+        ph: "փ",
+        jh: "ժ",
+        ju: "յու",
+        yo: "յո",
+        ye: "յե",
+        ev: "և",
+
+        a: "ա",
+        b: "բ",
+        g: "գ",
+        d: "դ",
+        e: "ե",
+        z: "զ",
+        i: "ի",
+        l: "լ",
+        x: "խ",
+        c: "ծ",
+        k: "կ",
+        h: "հ",
+        m: "մ",
+        y: "յ",
+        n: "ն",
+        o: "ո",
+        p: "պ",
+        j: "ջ",
+        r: "ր",
+        s: "ս",
+        v: "վ",
+        t: "տ",
+        u: "ու",
+        f: "ֆ",
+        q: "ք",
+        w: "վ"
+    };
+
+    const keys = Object.keys(map)
+        .sort((a, b) => b.length - a.length);
+
+    return text.replace(/[a-z]+/gi, word => {
+        const lower = word.toLowerCase();
+
+        if (dictionary[lower]) {
+            return dictionary[lower];
+        }
+
+        let result = "";
+
+        for (let i = 0; i < lower.length;) {
+            const key = keys.find(k => lower.startsWith(k, i));
+
+            if (key) {
+                result += map[key];
+                i += key.length;
+            } else {
+                result += lower[i++];
+            }
+        }
+
+        return result;
+    });
+}
+
+
+
+
+function normalizePreferenceItem(item) {
+    const original = String(item || "").trim();
+
+    if (!original) return "";
+
+    if (original.includes(":")) {
+        const parts = original.split(":");
+        const category = normalizePreferenceCategory(parts.shift());
+        const value = parts.join(":").trim();
+
+        if (!category || !value) return original;
+
+        return `${category}: ${value}`;
+    }
+
+    const match = original.match(
+        /^(?:իմ\s+)?սիրելի\s+(միրգյ?|մրգ|սպորտաձև|սպորտաձեվ|սպորտ|կենդանի|կենդանին|մեքենա|գույն)\s*(?:՝|:|-)?\s*(.+?)\s+է$/iu
+    );
+
+    if (!match) return original;
+
+    const category = normalizePreferenceCategory(match[1]);
+    let value = match[2].trim();
+
+    if (category === "կենդանի") {
+        value = value.replace(/ն$/u, "");
+    }
+
+    if (category === "միրգ") {
+        value = value.replace(/ը$/u, "");
+    }
+
+    if (!category || !value) return original;
+
+    return `${category}: ${value}`;
+}
+
+
+
 function emptyMemory() {
     return {
         facts: [],
         preferences: [],
         interests: [],
         devices: [],
+
+        // ZENIX MEMORY 2.0
+        goals: [],
+        projects: [],
+        games: [],
+        tasks: [],
+
         user_name: "",
         youtube_channel: "",
         pending_memory: null
     };
 }
 
-    function normalizeText(text) {
-        return String(text || "")
-            .normalize("NFC")
-            .toLowerCase()
-            .replace(/[՞?։!՝,]/gu, " ")
-            .replace(/[^\p{L}\p{N}\s]/gu, " ")
-            .replace(/\s+/g, " ")
-            .trim();
-    }
-
-    function cleanPreferenceWord(value) {
-        return String(value || "")
-            .normalize("NFC")
-            .replace(/[.!?։՝,]+$/gu, "")
-            .replace(/\s+/g, " ")
-            .trim();
-    }
-
-    function normalizePreferenceCategory(value) {
-        const category = normalizeText(value);
-
-        const aliases = {
-            "միրգ": "միրգ",
-            "մրգ": "միրգ",
-            "գույն": "գույն",
-            "խաղ": "խաղ",
-            "կենդանի": "կենդանի",
-            "երաժշտություն": "երաժշտություն",
-            "սպորտ": "սպորտ",
-            "ավտոմեքենա": "մեքենա",
-            "մեքենա": "մեքենա",
-"սպորտաձև": "սպորտ",
-            "սպորտաձևը": "սպորտ",
-            "игра": "խաղ",
-            "цвет": "գույն",
-            "животное": "կենդանի",
-            "фрукт": "միրգ",
-            "музыка": "երաժշտություն",
-            "спорт": "սպորտ",
-            "машина": "մեքենա",
-            "автомобиль": "մեքենա",
-
-            "game": "խաղ",
-            "games": "խաղ",
-            "color": "գույն",
-            "colour": "գույն",
-            "animal": "կենդանի",
-            "fruit": "միրգ",
-            "music": "երաժշտություն",
-            "sport": "սպորտ",
-            "car": "մեքենա",
-
-        };
-
-        if (aliases[category]) return aliases[category];
-
-        return category.replace(/(?:ը|ն)$/u, "");
-    }
-
-    // ==========================================
-    // MEMORY VALIDATION
-    // ==========================================
-
-   
-function normalizeMemory(memory) {
-    const result = emptyMemory();
-
-    if (!memory || typeof memory !== "object" || Array.isArray(memory)) {
-        return result;
-    }
-
-    // Պահպանում ենք բոլոր լրացուցիչ դաշտերը։
-    Object.assign(result, memory);
-
-    for (const key of ["facts", "preferences", "interests", "devices"]) {
-        result[key] = Array.isArray(memory[key])
-            ? [...new Set(
-                memory[key].filter(item => typeof item === "string")
-            )]
-            : [];
-    }
-
-    result.user_name =
-        typeof memory.user_name === "string" ? memory.user_name : "";
-
-    result.youtube_channel =
-        typeof memory.youtube_channel === "string"
-            ? memory.youtube_channel
-            : "";
-
-    result.pending_memory =
-        memory.pending_memory &&
-        typeof memory.pending_memory === "object" &&
-        !Array.isArray(memory.pending_memory)
-            ? memory.pending_memory
-            : null;
-
-    return result;
-}
-
-
-    // ==========================================
-    // MEMORY BACKUP
-    // ==========================================
-
-    function createMemoryBackup() {
-        try {
-            if (!fs.existsSync(MEMORY_FILE)) return true;
-
-            const current = fs.readFileSync(MEMORY_FILE, "utf8");
-
-            // Պահուստավորում ենք միայն վավեր JSON-ը։
-            JSON.parse(current);
-
-            fs.copyFileSync(MEMORY_FILE, MEMORY_BACKUP_FILE);
-
-            console.log("ZENIX MEMORY BACKUP UPDATED!");
-            return true;
-        } catch (error) {
-            console.error("MEMORY BACKUP ERROR:", error.message);
-            return false;
-        }
-    }
-
-    // ==========================================
-    // LOAD MEMORY
-    // ==========================================
-
-    function loadMemory() {
-        try {
-            if (!fs.existsSync(MEMORY_FILE)) {
-                return emptyMemory();
-            }
-
-            const data = fs.readFileSync(MEMORY_FILE, "utf8");
-            return normalizeMemory(JSON.parse(data));
-
-        } catch (error) {
-            console.error("MEMORY READ ERROR:", error.message);
-
-            // Եթե հիմնական հիշողությունը վնասված է,
-            // փորձում ենք վերականգնել backup-ից։
-            try {
-                if (fs.existsSync(MEMORY_BACKUP_FILE)) {
-                    const backupData = fs.readFileSync(
-                        MEMORY_BACKUP_FILE,
-                        "utf8"
-                    );
-
-                    const restored = normalizeMemory(JSON.parse(backupData));
-
-                    console.log("ZENIX MEMORY RESTORED FROM BACKUP!");
-
-                    return restored;
-                }
-            } catch (backupError) {
-                console.error(
-                    "MEMORY BACKUP READ ERROR:",
-                    backupError.message
-                );
-            }
-
-            return emptyMemory();
-        }
-    }
-
-    // ==========================================
-    // SAVE MEMORY
-    // ==========================================
-
-    function saveMemory(memory) {
-        try {
-            const safeMemory = normalizeMemory(memory);
-
-            // Նախ պահուստավորում ենք գործող հիշողությունը։
-            if (!createMemoryBackup()) {
-                console.warn("ZENIX: BACKUP COULD NOT BE UPDATED.");
-            }
-
-            // Նախ գրում ենք ժամանակավոր ֆայլում։
-            fs.writeFileSync(
-                MEMORY_TEMP_FILE,
-                JSON.stringify(safeMemory, null, 4),
-                "utf8"
-            );
-
-            // Փոխարինում ենք հիմնական ֆայլը։
-            // Հին ֆայլը նախապես չենք ջնջում։
-            fs.renameSync(MEMORY_TEMP_FILE, MEMORY_FILE);
-
-            console.log("ZENIX MEMORY SAVED!");
-            return true;
-
-        } catch (error) {
-            console.error("MEMORY SAVE ERROR:", error.message);
-
-            try {
-                if (fs.existsSync(MEMORY_TEMP_FILE)) {
-                    fs.unlinkSync(MEMORY_TEMP_FILE);
-                }
-            } catch (cleanupError) {
-                console.error("MEMORY TEMP CLEANUP ERROR:", cleanupError.message);
-            }
-
-            return false;
-        }
-    }
-
-    // ==========================================
-    // SECURITY
-    // ==========================================
-
-   const SENSITIVE_PATTERN =
-    /password|api[\s_-]*key|secret|token|գաղտնաբառ|пароль|գաղտնիք/i;
-    // ==========================================
-    // ADD MEMORY ITEM
-    // ==========================================
-
-        function addMemoryItem(memory, collection, value, oldValue = null) {
-            if (!Array.isArray(memory[collection])) {
-                memory[collection] = [];
-            }
-
-            const normalized = normalizeText(value);
-
-            if (!normalized) return false;
-
-            if (oldValue) {
-                const oldNormalized = normalizeText(oldValue);
-
-                memory[collection] = memory[collection].filter(
-                    item => normalizeText(item) !== oldNormalized
-                );
-            }
-
-            const exists = memory[collection].some(
-                item => normalizeText(item) === normalized
-            );
-
-            if (!exists) {
-                memory[collection].push(String(value).trim());
-            }
-
-            return true;
-        }
-
-    // ==========================================
-    // MEMORY COMMANDS
-    // ==========================================
-
-   
-function hasRememberCommand(message, clean = false) {
-    let text = String(message || "").trim();
-
-    const prefix =
-        /^\s*(?:հիշիր|հիշի|պահիր հիշողության մեջ|remember(?:\s+that)?|запомни(?:\s+что)?)(?=\s|[,՝:]|$)/iu;
-
-    const suffix =
-        /(?:^|\s)(?:հիշիր սա|հիշիր|պահիր հիշողության մեջ|remember this|remember that|запомни это|запомни)\s*[.!?։]*$/iu;
-
-    const hasPrefix = prefix.test(text);
-    const hasSuffix = suffix.test(text);
-
-    if (!hasPrefix && !hasSuffix) return false;
-
-    if (!clean) return true;
-
-    if (hasPrefix) {
-        text = text.replace(prefix, "");
-        text = text.replace(/^[\s,՝:]+/u, "");
-    } else {
-        text = text.replace(suffix, "");
-    }
-
-    text = text.replace(/^(?:որ|that|что)\s+/iu, "");
-
-    return text.trim();
-}
-
-
-    // ==========================================
-    // REMEMBER NAME
-    // ==========================================
-
-    function rememberName(cleaned, memory) {
-        const value = String(cleaned || "")
-            .trim()
-            .replace(/[.!?։]+$/u, "");
-
-        const patterns = [
-            /^(?:իմ անունը|անունս)\s+(.+?)\s+է$/iu,
-            /^my name is\s+(.+)$/i,
-            /^меня зовут\s+(.+)$/i,
-            /^im anuny\s+(.+?)\s+e$/i
-        ];
-
-        for (const pattern of patterns) {
-            const match = value.match(pattern);
-            if (!match) continue;
-
-            const name = match[1].trim();
-
-            if (
-                !name ||
-                name.length > 80 ||
-                SENSITIVE_PATTERN.test(name)
-            ) {
-                return false;
-            }
-
-            memory.user_name = name;
-
-            return saveMemory(memory) ? "name" : false;
-        }
-
-        return false;
-    }
-
-    // ==========================================
-    // AUTOMATIC MEMORY DETECTION
-    // ==========================================
-
-   
-function detectAutomaticMemory(message) {
-    const text = String(message || "")
+function normalizeText(value) {
+    return armenianTransliterate(String(value || ""))
+        .toLowerCase()
         .normalize("NFC")
+        .replace(/[։.,!?՝'"]/gu, "")
+        .replace(/\s+/gu, " ")
         .trim();
-
-    if (
-        text.length < 4 ||
-        text.length > 500 ||
-        SENSITIVE_PATTERN.test(text)
-    ) {
-        return null;
-    }
-
-    // NAME
-    const namePatterns = [
-        /^(?:իմ անունը|անունս)\s+(.+?)\s+է[.!?։]*$/iu,
-        /^my name is\s+(.+?)[.!?]*$/iu,
-        /^меня зовут\s+(.+?)[.!?]*$/iu,
-        /^im anuny\s+(.+?)\s+e[.!?]*$/iu
-    ];
-
-    for (const pattern of namePatterns) {
-        const match = text.match(pattern);
-
-        if (match) {
-            const name = cleanPreferenceWord(match[1]);
-
-            if (!name || name.length > 80) return null;
-
-            return { type: "name", value: name };
-        }
-    }
-
-    // ARMENIAN FAVORITE
-    const armenianMatch = text.match(
-        /^իմ սիրելի\s+(.+?)\s+(.+?)\s+է[.!?։]*$/iu
-    );
-
-    if (armenianMatch) {
-        const category = normalizePreferenceCategory(armenianMatch[1]);
-        const value = cleanPreferenceWord(armenianMatch[2]);
-
-        if (!category || !value) return null;
-
-        return {
-            type: "preference",
-            value: `Իմ սիրելի ${category} ${value} է`
-        };
-    }
-
-    // ENGLISH FAVORITE
-    const englishMatch = text.match(
-        /^my favorite\s+(.+?)\s+is\s+(.+?)[.!?]*$/iu
-    );
-
-    if (englishMatch) {
-        const category = normalizePreferenceCategory(englishMatch[1]);
-        const value = cleanPreferenceWord(englishMatch[2]);
-
-        if (!category || !value) return null;
-
-        return {
-            type: "preference",
-            value: `Իմ սիրելի ${category} ${value} է`
-        };
-    }
-
-    return null;
 }
 
-function updateMemoryFact(message) {
-    const detected = detectAutomaticMemory(message);
 
-    if (!detected) return false;
+/* =====================================================
+   MEMORY DIRECTORY
+===================================================== */
 
-    const memory = loadMemory();
 
-    if (detected.type === "preference") {
-        return rememberPreference(detected.value, memory);
-    }
 
-    if (detected.type === "name") {
-        return rememberName(detected.value, memory);
-    }
+/* =====================================================
+   MEMORY DIRECTORY
+===================================================== */
 
-    return false;
-}
+function createMemoryBackup() {
+    try {
+        if (!fs.existsSync(MEMORY_FILE)) return true;
 
-function rememberInterest(message) {
-    const text = String(message || "").trim();
+        const current = fs.readFileSync(MEMORY_FILE, "utf8");
 
-    if (
-        text.length < 4 ||
-        text.length > 500 ||
-        SENSITIVE_PATTERN.test(text)
-    ) {
-        return false;
-    }
+        JSON.parse(current);
 
-    const patterns = [
-        /^ես սիրում եմ\s+(.+?)$/iu,
-        /^ինձ դուր է գալիս\s+(.+?)$/iu,
-        /^i love\s+(.+)$/i,
-        /^i like\s+(.+)$/i,
-        /^мне нравится\s+(.+)$/iu
-    ];
-
-    let match = null;
-
-    for (const pattern of patterns) {
-        match = text.match(pattern);
-        if (match) break;
-    }
-
-    if (!match) return false;
-
-    const value = cleanPreferenceWord(match[1]);
-
-    if (!value || value.length > 100) return false;
-
-    const memory = loadMemory();
-
-    const normalized = normalizeText(value);
-
-    const exists = memory.interests.some(item =>
-        normalizeText(item).includes(normalized)
-    );
-
-    if (!exists) {
-        addMemoryItem(
-            memory,
-            "interests",
-            `Ես սիրում եմ ${value}`
+        fs.copyFileSync(
+            MEMORY_FILE,
+            MEMORY_BACKUP_FILE
         );
 
-        if (!saveMemory(memory)) return false;
+        return true;
+
+    } catch (error) {
+        console.error("MEMORY BACKUP ERROR:", error.message);
+        return false;
     }
+}
+
+
+/* =====================================================
+   MEMORY BACKUP
+===================================================== */
+
+
+
+/* =====================================================
+   SAVE MEMORY
+===================================================== */
+
+function ensureMemoryDirectory() {
+    try {
+        fs.mkdirSync(MEMORY_DIR, {
+            recursive: true
+        });
+
+        return fs.statSync(MEMORY_DIR).isDirectory();
+    } catch (error) {
+        console.error(
+            "MEMORY DIRECTORY ERROR:",
+            error.message
+        );
+
+        return false;
+    }
+}
+
+
+
+function saveMemory(memory) {
+    let savedSuccessfully = false;
+
+    try {
+        if (!ensureMemoryDirectory()) return false;
+
+        const safeMemory = normalizeMemory(memory);
+
+        const memoryJSON = JSON.stringify(
+            safeMemory,
+            null,
+            4
+        );
+
+        // Ժամանակավոր ֆայլի պահպանում
+        fs.writeFileSync(
+            MEMORY_TEMP_FILE,
+            memoryJSON,
+            "utf8"
+        );
+
+        // Ստուգում ենք JSON-ը
+        const verifiedMemory = JSON.parse(
+            fs.readFileSync(MEMORY_TEMP_FILE, "utf8")
+        );
+
+        if (
+            !verifiedMemory ||
+            typeof verifiedMemory !== "object" ||
+            Array.isArray(verifiedMemory)
+        ) {
+            throw new Error("INVALID MEMORY JSON");
+        }
+
+        // Փոխարինում ենք հիմնական ֆայլը
+        fs.renameSync(
+            MEMORY_TEMP_FILE,
+            MEMORY_FILE
+        );
+
+        savedSuccessfully = true;
+
+        console.log("ZENIX MEMORY SAVED!");
+
+        console.log(
+            "ZENIX PREFERENCES:",
+            safeMemory.preferences
+        );
+
+        // Backup-ը թարմացնում ենք առանձին
+        try {
+            fs.copyFileSync(
+                MEMORY_FILE,
+                MEMORY_BACKUP_FILE
+            );
+
+            console.log("ZENIX BACKUP UPDATED!");
+
+        } catch (backupError) {
+            console.error(
+                "BACKUP UPDATE WARNING:",
+                backupError.message
+            );
+        }
+
+        return true;
+
+    } catch (error) {
+        console.error(
+            "MEMORY SAVE ERROR:",
+            error.message
+        );
+
+        return savedSuccessfully;
+        
+    } finally {
+        try {
+            if (fs.existsSync(MEMORY_TEMP_FILE)) {
+                fs.unlinkSync(MEMORY_TEMP_FILE);
+            }
+        } catch {}
+    }
+}
+
+
+
+function removeMemoryItem(
+    memory,
+    collection,
+    value
+) {
+const target = collection === "games"
+    ? normalizeGame(value)
+    : normalizeText(
+        collection === "preferences"
+            ? normalizePreferenceItem(value)
+            : value
+    );
+
+if (!target) return false;
+
+const oldLength = memory[collection].length;
+
+memory[collection] = memory[collection].filter(item => {
+    const normalized = collection === "games"
+        ? normalizeGame(item)
+        : normalizeText(
+            collection === "preferences"
+                ? normalizePreferenceItem(item)
+                : item
+        );
+
+    return normalized !== target;
+});
+
+    if (!target) return false;
+
+
+    memory[collection] = memory[collection].filter(item => {
+        const normalized = normalizeText(
+            collection === "preferences"
+                ? normalizePreferenceItem(item)
+                : item
+        );
+
+        return normalized !== target;
+    });
+
+    if (memory[collection].length === oldLength) {
+        return "not_found";
+    }
+
+    const saved = saveMemory(memory);
+
+    if (!saved) {
+        return false;
+    }
+
+    console.log(
+        "ZENIX MEMORY REMOVED:",
+        collection,
+        value
+    );
 
     return true;
 }
 
 
-    // ==========================================
-    // SAVE AUTOMATIC MEMORY
-    // ==========================================
+/* =====================================================
+   LOAD MEMORY
+===================================================== */
+
+
+function loadMemory() {
+    const empty = normalizeMemory({});
+
+    try {
+        if (!ensureMemoryDirectory()) {
+            return empty;
+        }
+
+        // 1. Ստուգում ենք հիմնական հիշողությունը
+        if (fs.existsSync(MEMORY_FILE)) {
+            try {
+                const raw = JSON.parse(
+                    fs.readFileSync(MEMORY_FILE, "utf8")
+                );
+
+                // Չենք ընդունում սխալ կառուցվածքով JSON
+                if (
+                    !raw ||
+                    typeof raw !== "object" ||
+                    Array.isArray(raw)
+                ) {
+                    throw new Error("INVALID MAIN MEMORY");
+                }
+
+                const memory = normalizeMemory(raw);
+
+                console.log("ZENIX MEMORY LOADED!");
+
+                // Backup-ը թարմացնում ենք միայն
+                // հաջող ընթերցումից և ստուգումից հետո
+                try {
+                    fs.copyFileSync(
+                        MEMORY_FILE,
+                        MEMORY_BACKUP_FILE
+                    );
+
+                    console.log("ZENIX BACKUP UPDATED!");
+
+                } catch (error) {
+                    console.error(
+                        "BACKUP UPDATE WARNING:",
+                        error.message
+                    );
+                }
+
+                return memory;
+
+            } catch (error) {
+                console.error(
+                    "MAIN MEMORY LOAD ERROR:",
+                    error.message
+                );
+            }
+        }
+
+        // 2. Փորձում ենք վերականգնել Backup-ից
+        if (fs.existsSync(MEMORY_BACKUP_FILE)) {
+            try {
+                const backup = JSON.parse(
+                    fs.readFileSync(
+                        MEMORY_BACKUP_FILE,
+                        "utf8"
+                    )
+                );
+
+                if (
+                    !backup ||
+                    typeof backup !== "object" ||
+                    Array.isArray(backup)
+                ) {
+                    throw new Error("INVALID BACKUP MEMORY");
+                }
+
+                const restored = normalizeMemory(backup);
+
+                // Վերականգնում ենք հիմնական ֆայլը
+                if (!saveMemory(restored)) {
+                    console.error(
+                        "MEMORY BACKUP RESTORE FAILED"
+                    );
+                } else {
+                    console.log(
+                        "MEMORY RESTORED FROM BACKUP"
+                    );
+                }
+
+                return restored;
+
+            } catch (error) {
+                console.error(
+                    "BACKUP LOAD ERROR:",
+                    error.message
+                );
+            }
+        }
+
+        // 3. Երկու ֆայլերն էլ օգտագործելի չեն
+        console.error(
+            "NO VALID MEMORY OR BACKUP FOUND"
+        );
+
+        return empty;
+
+    } catch (error) {
+        console.error(
+            "MEMORY LOAD ERROR:",
+            error.message
+        );
+
+        return empty;
+    }
+}
+
+
+
+
+
+
+/* =====================================================
+   SECURITY
+===================================================== */
+
+const SENSITIVE_PATTERN =
+    /password|api[\s_-]*key|secret|token|գաղտնաբառ|пароль|գաղտնիք/i;
+
+function isSensitiveMemory(value) {
+    return SENSITIVE_PATTERN.test(String(value || ""));
+}
+
+/* =====================================================
+   MEMORY ITEM
+===================================================== */
+
+function normalizeTaskKey(value) {
+    return normalizeText(value)
+        .replace(/\b(?:պետք է|պիտի|անհրաժեշտ է|հիշեցրու|հիշեցնել|հիշիր)\b/gu, " ")
+        .replace(/\b(?:վաղը|այսօր|մյուս օրը)\b/gu, " ")
+        .replace(/\s+/gu, " ")
+        .trim();
+}
+function addMemoryItem(
+    memory,
+    collection,
+    value,
+    oldValue = null
+) {
+    const allowedCollections = [
+        "facts",
+        "preferences",
+        "interests",
+        "devices",
+        "goals",
+        "projects",
+        "games",
+        "tasks"
+    ];
+
+    // Բաժնի ստուգում
+    if (!allowedCollections.includes(collection)) {
+        console.error(
+            "ZENIX MEMORY: Invalid collection:",
+            collection
+        );
+        return false;
+    }
+
+    if (!Array.isArray(memory[collection])) {
+        memory[collection] = [];
+    }
+
+    let cleanValue = String(value ?? "").trim();
+
+    if (!cleanValue || isSensitiveMemory(cleanValue)) {
+        return false;
+    }
+
+    // Նախասիրությունների միասնական ձևաչափ
+    if (collection === "preferences") {
+        cleanValue = normalizePreferenceItem(cleanValue);
+    }
+
+const normalized = collection === "tasks"
+    ? normalizeTaskKey(cleanValue)
+    : normalizeText(cleanValue);
+    if (!normalized) return false;
+
+    // Հին արժեքի հեռացում
+    if (oldValue) {
+        let oldNormalized = normalizeText(oldValue);
+
+        if (collection === "preferences") {
+            oldNormalized = normalizeText(
+                normalizePreferenceItem(oldValue)
+            );
+        }
+
+        memory[collection] = memory[collection].filter(item => {
+            let itemNormalized = normalizeText(item);
+
+            if (collection === "preferences") {
+                itemNormalized = normalizeText(
+                    normalizePreferenceItem(item)
+                );
+            }
+
+            return itemNormalized !== oldNormalized;
+        });
+    }
+
+    // Կրկնությունների ստուգում
+    const exists = memory[collection].some(item => {
+       let itemNormalized = collection === "tasks"
+    ? normalizeTaskKey(item)
+    : normalizeText(item);
+        if (collection === "preferences") {
+            itemNormalized = normalizeText(
+                normalizePreferenceItem(item)
+            );
+        }
+
+        return itemNormalized === normalized;
+    });
+
+    if (exists) return "exists";
+
+    memory[collection].push(cleanValue);
+
+    return true;
+}
+
+
+/* =====================================================
+   PREFERENCE CATEGORY
+===================================================== */
+
+function normalizeMemory(raw) {
+    const defaults = emptyMemory();
+
+    const source =
+        raw &&
+        typeof raw === "object" &&
+        !Array.isArray(raw)
+            ? raw
+            : {};
+
+    const memory = {
+        ...defaults,
+        ...source
+    };
+
+    const collections = [
+        "facts",
+        "preferences",
+        "interests",
+        "devices",
+        "goals",
+        "projects",
+        "games",
+        "tasks"
+    ];
+
+    for (const collection of collections) {
+        if (!Array.isArray(source[collection])) {
+            memory[collection] = [];
+            continue;
+        }
+
+        memory[collection] = source[collection]
+            .filter(item => typeof item === "string")
+            .map(item => item.trim())
+            .filter(Boolean);
+    }
+
+    memory.preferences = memory.preferences.map(
+        normalizePreferenceItem
+    );
+
+    memory.user_name = String(source.user_name || "");
+    memory.youtube_channel = String(
+        source.youtube_channel || ""
+    );
+
+    memory.pending_memory =
+        source.pending_memory ?? null;
+
+    return memory;
+}
+
+
+function normalizePreferenceCategory(value) {
+    const category = normalizeText(value)
+        .replace(/^իմ սիրելի\s+/u, "")
+        .replace(/[:՝-]$/u, "")
+        .trim();
+
+    const aliases = {
+        "միրգ": "միրգ",
+        "միրգյ": "միրգ",
+        "մրգ": "միրգ",
+        "սպորտ": "սպորտ",
+        "սպորտաձև": "սպորտ",
+        "սպորտաձեվ": "սպորտ",
+        "կենդանի": "կենդանի",
+        "կենդանին": "կենդանի",
+        "մեքենա": "մեքենա",
+        "գույն": "գույն"
+    };
+
+    return aliases[category] || category;
+}
+
+function getSavedPreferenceCategory(item) {
+    const text = String(item || "").trim();
+
+    if (!text) return "";
+
+    // Նոր ձևաչափ
+    if (text.includes(":")) {
+        return normalizePreferenceCategory(
+            text.split(":")[0]
+        );
+    }
+
+    // Հին ձևաչափ
+    const match = text.match(
+        /^(?:իմ\s+)?սիրելի\s+(միրգյ?|սպորտաձև|սպորտ|կենդանի|կենդանին|մեքենա|գույն)\s*(?:՝|:|-)?\s*(.+?)\s+է$/iu
+    );
+
+    if (match) {
+        return normalizePreferenceCategory(match[1]);
+    }
+
+    return "";
+}
+
+
+function getSavedPreferenceValue(item) {
+    const text = String(item || "").trim();
+
+    if (!text) return "";
+
+    // Նոր միասնական ձևաչափ
+    if (text.includes(":")) {
+        return text.split(":").slice(1).join(":").trim();
+    }
+
+    // Հին նախադասությունների ձևաչափ
+    const match = text.match(
+        /^(?:իմ\s+)?սիրելի\s+(?:միրգյ?|սպորտաձև|սպորտ|կենդանի|կենդանին|մեքենա|գույն)\s*(?:՝|:|-)?\s*(.+?)\s+է$/iu
+    );
+
+    return match ? match[1].trim() : "";
+}
+
+
+/* =====================================================
+   SAVE PREFERENCE
+===================================================== */
+
+function savePreference(memory, category, value) {
+    if (!Array.isArray(memory.preferences)) {
+        memory.preferences = [];
+    }
+
+    const cleanValue = String(value || "").trim();
+
+    if (
+        !category ||
+        !cleanValue ||
+        isSensitiveMemory(cleanValue)
+    ) {
+        return false;
+    }
+
+    const normalizedCategory =
+        normalizePreferenceCategory(category);
+
+    if (!normalizedCategory) return false;
+
+    // Հեռացնում ենք նույն կատեգորիայի բոլոր հին գրառումները
+    memory.preferences = memory.preferences.filter(item => {
+        const savedCategory =
+            getSavedPreferenceCategory(item);
+
+        return savedCategory !== normalizedCategory;
+    });
+
+    // Պահպանում ենք միասնական ձևաչափով
+    const newItem =
+        `${normalizedCategory}: ${cleanValue}`;
+
+    memory.preferences.push(newItem);
+
+    return true;
+}
+
+
+
+function saveGame(memory, value) {
+    if (!Array.isArray(memory.games)) {
+        memory.games = [];
+    }
+
+    const cleanValue = String(value || "").trim();
+
+    if (!cleanValue || isSensitiveMemory(cleanValue)) {
+        return false;
+    }
+
+    const newKey = normalizeGame(cleanValue);
+
+    if (!newKey) return false;
+
+    const existingGame = memory.games.some(game =>
+        normalizeGame(game) === newKey
+    );
+
+    if (existingGame) {
+        return "exists";
+    }
+
+    memory.games.push(cleanValue);
+
+    return "saved";
+}
+
+
+
+/* =====================================================
+   MEMORY COLLECTION
+===================================================== */
+
+
+function getMemoryCollection(type) {
+    const map = {
+        fact: "facts",
+        interest: "interests",
+        device: "devices",
+        goal: "goals",
+        project: "projects",
+        game: "games",
+        task: "tasks"
+    };
+
+    return map[type] || null;
+}
+
+
+/* =====================================================
+   GEMINI MEMORY ANALYZER
+===================================================== */
 
   
-function saveAutomaticMemory(message) {
-    const detected = detectAutomaticMemory(message);
+async function analyzeMemoryWithGemini(message) {
+    const apiKey = process.env.GEMINI_API_KEY;
 
-    if (!detected) return null;
+    if (!apiKey) return null;
+
+    const text = String(message || "").trim();
+
+    if (!text || text.length > 3000) return null;
+
+    const prompt = `
+Դու ZENIX-ի հիշողության ճանաչման համակարգն ես։
+
+Վերլուծիր օգտատիրոջ վերջին հաղորդագրությունը։
+
+Ճանաչիր միայն հստակ տեղեկություններ հենց օգտատիրոջ մասին։
+
+Հնարավոր տեսակները՝
+name, preference, interest, fact, device, game, project, goal, task, none։
+ԱՌԱՋԱԴՐԱՆՔՆԵՐ
+
+1. Կոնկրետ անելիքները դասակարգիր որպես task։
+2. Ժամանակով սահմանված անելիքները դասակարգիր որպես task։
+3. Վաղվա կամ առաջիկա օրերի անելիքները դասակարգիր որպես task։
+4. Առաջադրանքը երբեք մի դասակարգիր project։
+5. Վերադարձիր միայն առաջադրանքի նկարագրությունը։
+
+ՕՐԻՆԱԿ
+
+Հաղորդագրություն՝ Վաղը պետք է շարունակեմ ZENIX-ի ծրագրավորումը։
+
+{
+    "type": "task",
+    "category": null,
+    "value": "Շարունակել ZENIX-ի ծրագրավորումը",
+    "confidence": 0.98
+}
+ԸՆԴՀԱՆՈՒՐ ԿԱՆՈՆՆԵՐ
+
+ԼԵԶՎԻ ՄԻԱՍՆԱԿԱՆԱՑՈՒՄ
+
+1. Հիշողության բոլոր առաջադրանքների value-ն պետք է լինի հայերեն։
+2. Եթե օգտատիրոջ առաջադրանքը անգլերեն է, թարգմանիր հայերեն։
+3. Եթե առաջադրանքը ռուսերեն է, թարգմանիր հայերեն։
+4. Եթե առաջադրանքն արդեն հայերեն է, պահպանիր առանց փոփոխության։
+5. Պահպանիր սկզբնական իմաստը՝ առանց նոր տեղեկություն ավելացնելու։
+6. Տեխնիկական անվանումները, օրինակ՝ ZENIX, API, Node.js, մի թարգմանիր։
+7. Առաջադրանքի value-ում մի պահպանիր ժամանակային ավելորդ բառերը, եթե դրանք առաջադրանքի իմաստի համար անհրաժեշտ չեն։
+8. Այս կանոնները պարտադիր են հատկապես type = task դեպքերում։
+
+1. Հասկացիր հայերենը։
+2. Հասկացիր լատինատառ հայերենը։
+3. Հասկացիր բնական խոսքը։
+4. Մի պահանջիր կոնկրետ նախադասության կառուցվածք։
+5. Մի գրանցիր հարցերը որպես փաստ։
+6. Մի գրանցիր ուրիշ մարդկանց մասին տեղեկությունները։
+7. Մի հորինիր արժեքներ։
+8. Անորոշության դեպքում վերադարձիր none։
+9. Մի ճանաչիր հիպոթետիկ նախադասությունները։
+10. Մի ճանաչիր մեջբերված տեքստի տեղեկությունը որպես օգտատիրոջ փաստ։
+11. Մի պահպանիր գաղտնաբառեր, API key-եր կամ գաղտնի տվյալներ։
+
+ԽԱՂԵՐԻ ՃԱՆԱՉՈՒՄ
+
+12. Խաղերի անունները միշտ դասակարգիր որպես game։
+13. Սիրելի խաղերը նույնպես դասակարգիր որպես game։
+14. Խաղ խաղալու մասին տեղեկությունը նույնպես դասակարգիր որպես game։
+15. Խաղերի անունները մի գրանցիր preference կամ interest բաժիններում։
+16. Խաղերի համար category-ն պետք է լինի null։
+17. Օգտագործիր խաղերի ընդհանուր գիտելիքներդ։
+18. Ճանաչիր խաղերի կրճատ անվանումները։
+19. Ճանաչիր GTA 5, GTA V, GTA5 և նման տարբերակները։
+20. Ճանաչիր RDR2, CS2, ETS2, FH6 և նման կրճատումները։
+21. Յուրաքանչյուր ճանաչված խաղի համար վերադարձիր պաշտոնական ամբողջական անվանումը։
+22. Նույն խաղի տարբեր անվանումները վերածիր մեկ միասնական անվան։
+23. Տարբեր խաղերի անունները երբեք մի միավորիր։
+24. Նոր խաղերի համար մի պահանջիր, որ դրանք նախապես լինեն կոդում։
+25. Եթե խաղի անունը վստահորեն չես ճանաչում, վերադարձիր none։
+26. Երբեք մի հորինիր խաղի գոյություն կամ անվանում։
+
+ՆԱԽԱՍԻՐՈՒԹՅՈՒՆՆԵՐ
+
+27. Նախասիրությունները դասակարգիր որպես preference։
+28. Նախասիրության category-ն գրիր կարճ և ստանդարտ ձևով։
+29. Preference-ի value-ում գրիր միայն նախընտրած արժեքը։
+30. Ընդհանուր հետաքրքրությունները դասակարգիր որպես interest։
+ՆԱԽԱԳԾԵՐ ԵՎ ՆՊԱՏԱԿՆԵՐ
+
+31. Նախագծերը դասակարգիր որպես project։
+32. Օգտատիրոջ ստեղծած կամ ստեղծվող նախագծերը պահպանիր project տեսակով։
+33. Ռոբոտի, ծրագրի, բիզնեսի կամ այլ սեփական նախագծի մասին հստակ տեղեկությունը դասակարգիր project։
+34. Նպատակները դասակարգիր որպես goal։
+35. Նախագիծը երբեք մի դասակարգիր interest։
+36. Եթե օգտատերը հայտնում է իր նախագիծը պահպանելու հստակ ցանկություն, վերադարձիր project։
+37. Վերադարձիր միայն իրականում նշված նախագծի անունը կամ նկարագրությունը։
+
+ՕՐԻՆԱԿ
+
+Հաղորդագրություն՝ Հիշիր, որ իմ գլխավոր նախագիծը ZENIX ռոբոտի ստեղծումն է։
+
+{
+    "type": "project",
+    "category": null,
+    "value": "ZENIX ռոբոտի ստեղծում",
+    "confidence": 0.98
+}
+
+Հաղորդագրություն՝ Իմ նպատակն է սովորել ծրագրավորում։
+
+{
+    "type": "goal",
+    "category": null,
+    "value": "Սովորել ծրագրավորում",
+    "confidence": 0.98
+}
+ՕՐԻՆԱԿՆԵՐ
+
+Հաղորդագրություն՝ Հիշիր, որ սիրում եմ ETS 2։
+
+{
+    "type": "game",
+    "category": null,
+    "value": "Euro Truck Simulator 2",
+    "confidence": 0.98
+}
+
+Հաղորդագրություն՝ Հիշիր, որ սիրում եմ CS2։
+
+{
+    "type": "game",
+    "category": null,
+    "value": "Counter-Strike 2",
+    "confidence": 0.98
+}
+
+Հաղորդագրություն՝ Իմ սիրելի խաղը GTA 5-ն է։
+
+{
+    "type": "game",
+    "category": null,
+    "value": "Grand Theft Auto V",
+    "confidence": 0.98
+}
+
+Հաղորդագրություն՝ Ես սիրում եմ RDR2։
+
+{
+    "type": "game",
+    "category": null,
+    "value": "Red Dead Redemption 2",
+    "confidence": 0.98
+}
+
+Հաղորդագրություն՝ Իմ սիրելի խաղը Evolve RP-ն է։
+
+{
+    "type": "game",
+    "category": null,
+    "value": "EVOLVE RP",
+    "confidence": 0.98
+}
+
+Հաղորդագրություն՝ Ես սիրում եմ ֆուտբոլ։
+
+{
+    "type": "interest",
+    "category": null,
+    "value": "ֆուտբոլ",
+    "confidence": 0.98
+}
+
+Հաղորդագրություն՝ Իմ սիրելի գույնը սև է։
+
+{
+    "type": "preference",
+    "category": "գույն",
+    "value": "սև",
+    "confidence": 0.98
+}
+
+
+
+Եթե տեղեկություն չկա՝
+
+{
+    "type": "none",
+    "category": null,
+    "value": null,
+    "confidence": 0
+}
+
+Վերադարձիր միայն վավեր JSON։
+Մի ավելացրու Markdown կամ բացատրություններ։
+
+Օգտատիրոջ հաղորդագրություն՝
+${JSON.stringify(text)}
+`;
+
+    try {
+        const response = await fetch(
+            GEMINI_URL + encodeURIComponent(apiKey),
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    contents: [
+                        {
+                            role: "user",
+                            parts: [{ text: prompt }]
+                        }
+                    ],
+                    generationConfig: {
+                        temperature: 0.1,
+                        maxOutputTokens: 300,
+                        responseMimeType: "application/json"
+                    }
+                }),
+                signal: AbortSignal.timeout(30000)
+            }
+        );
+
+        if (!response.ok) {
+            console.error(
+                "MEMORY ANALYZER ERROR:",
+                await response.text()
+            );
+
+            return null;
+        }
+
+        const data = await response.json();
+
+        const raw = data.candidates?.[0]?.content?.parts
+            ?.map(part => part.text || "")
+            .join("")
+            .trim();
+
+        if (!raw) return null;
+
+        const result = JSON.parse(raw);
+console.log(
+    "ZENIX TASK ANALYZER RESULT:",
+    result
+);
+
+ const allowed = [
+    "name",
+    "preference",
+    "interest",
+    "fact",
+    "device",
+    "game",
+    "project",
+    "goal",
+    "task",
+    "none"
+];
+
+        if (!allowed.includes(result.type)) return null;
+
+        if (result.type === "none") return null;
+
+        if (
+            typeof result.value !== "string" ||
+            !result.value.trim()
+        ) {
+            return null;
+        }
+
+        if (
+            typeof result.confidence !== "number" ||
+            result.confidence < 0.65 ||
+            result.confidence > 1
+        ) {
+            return null;
+        }
+
+        if (
+            result.value.length > 300 ||
+            isSensitiveMemory(result.value)
+        ) {
+            return null;
+        }
+
+        if (
+            result.type === "preference" &&
+            (
+                typeof result.category !== "string" ||
+                !result.category.trim()
+            )
+        ) {
+            return null;
+        }
+
+        if (
+            result.type === "game" &&
+            result.category !== null
+        ) {
+            return null;
+        }
+
+        return {
+            type: result.type,
+         category: result.category == null
+    ? null
+    : String(result.category).trim(),
+            value: result.value.trim(),
+            confidence: result.confidence
+        };
+
+    } catch (error) {
+        console.error(
+            "MEMORY ANALYZER ERROR:",
+            error.message
+        );
+
+        return null;
+    }
+}
+
+
+/* =====================================================
+   SAVE DETECTED MEMORY
+===================================================== */
+
+
+
+function saveDetectedMemory(memory, detected) {
+    if (!memory || !detected) return false;
 
     const value = String(detected.value || "").trim();
 
-    if (
-        !value ||
-        value.length > 500 ||
-        SENSITIVE_PATTERN.test(value)
-    ) {
-        return null;
+    if (!value || isSensitiveMemory(value)) {
+        return false;
     }
 
-    // Չթողնել, որ փոփոխության նախադասությունը
-    // սխալմամբ պահպանվի որպես նոր նախասիրություն։
-    if (
-        detected.type === "preference" &&
-        /(այլևս|չեմ սիրում|չեմ հավանում|թողել եմ|այլևս չեմ)/iu.test(message)
-    ) {
-        return null;
-    }
-
-    const memory = loadMemory();
-
+    // Անվան պահպանում
     if (detected.type === "name") {
-        if (value.length > 80) return null;
-
         if (
-            normalizeText(memory.user_name) === normalizeText(value)
+            normalizeText(memory.user_name) ===
+            normalizeText(value)
         ) {
             return "exists";
         }
 
         memory.user_name = value;
-
-    } else if (detected.type === "preference") {
-        const match = value.match(
-            /^իմ սիրելի\s+(.+?)\s+(.+?)\s+է$/iu
-        );
-
-        if (!match) return null;
-
-        const category = normalizePreferenceCategory(match[1]);
-        const newValue = cleanPreferenceWord(match[2]);
-
-        const allowedCategories = [
-            "գույն",
-            "խաղ",
-            "կենդանի",
-            "միրգ",
-            "մեքենա",
-            "երաժշտություն",
-            "սպորտ"
-        ];
-
-        if (
-            !allowedCategories.includes(category) ||
-            !newValue ||
-            newValue.length > 100
-        ) {
-            return null;
-        }
-
-        const sameCategory = memory.preferences.filter(item => {
-            const oldMatch = String(item)
-                .replace(/[.!?։]+$/u, "")
-                .match(/^իմ սիրելի\s+(.+?)\s+(.+?)\s+է$/iu);
-
-            return oldMatch &&
-                normalizePreferenceCategory(oldMatch[1]) === category;
-        });
-
-        const alreadyExists = sameCategory.some(item => {
-            const oldMatch = String(item)
-                .replace(/[.!?։]+$/u, "")
-                .match(/^իմ սիրելի\s+(.+?)\s+(.+?)\s+է$/iu);
-
-            return oldMatch &&
-                normalizeText(oldMatch[2]) === normalizeText(newValue);
-        });
-
-        if (alreadyExists && sameCategory.length === 1) {
-            return "exists";
-        }
-
-        // Հեռացնում ենք միայն նույն կատեգորիայի հին արժեքները
-        memory.preferences = memory.preferences.filter(item => {
-            const oldMatch = String(item)
-                .replace(/[.!?։]+$/u, "")
-                .match(/^իմ սիրելի\s+(.+?)\s+(.+?)\s+է$/iu);
-
-            if (!oldMatch) return true;
-
-            return normalizePreferenceCategory(oldMatch[1]) !== category;
-        });
-
-        addMemoryItem(
-            memory,
-            "preferences",
-            `Իմ սիրելի ${category} ${newValue} է`
-        );
-
-    } else {
-        return null;
+        return "saved";
     }
 
-    if (!saveMemory(memory)) return null;
+    // Խաղերի պահպանում
+    if (detected.type === "game") {
+        return saveGame(memory, value);
+    }
 
-    console.log("ZENIX AUTO MEMORY SAVED:", detected);
+    // Նախասիրությունների պահպանում
+    if (detected.type === "preference") {
+        if (!Array.isArray(memory.preferences)) {
+            memory.preferences = [];
+        }
 
-    return "saved";
+        const category = normalizePreferenceCategory(
+            detected.category
+        );
+
+        if (!category) return false;
+
+        const same = memory.preferences.some(item =>
+            getSavedPreferenceCategory(item) === category &&
+            normalizeText(getSavedPreferenceValue(item)) ===
+            normalizeText(value)
+        );
+
+        if (same) return "exists";
+
+        return savePreference(memory, category, value)
+            ? "saved"
+            : false;
+    }
+
+    // Մնացած հիշողության բաժինները
+    const collection = getMemoryCollection(detected.type);
+
+    const allowedCollections = [
+        "facts",
+        "interests",
+        "devices",
+        "goals",
+        "projects",
+        "games",
+        "tasks"
+    ];
+
+    if (!allowedCollections.includes(collection)) {
+        return false;
+    }
+
+    const result = addMemoryItem(
+        memory,
+        collection,
+        value
+    );
+
+    if (result === "exists") return "exists";
+
+    return result === true ? "saved" : false;
 }
 
 
-    // ==========================================
-    // REMEMBER PREFERENCE
-    // ==========================================
+/* =====================================================
+   AUTOMATIC MEMORY
+===================================================== */
+async function saveAutomaticMemory(message) {
+    const detected = await analyzeMemoryWithGemini(message);
 
-    function rememberPreference(cleaned, memory) {
-        const value = String(cleaned || "")
-            .trim()
-            .replace(/[.!?։]+$/u, "");
+    if (!detected) return false;
 
-        if (
-            !value ||
-            value.length > 500 ||
-            SENSITIVE_PATTERN.test(value)
-        ) {
-            return false;
-        }
-
-        // Եթե նախասիրությունը ճանաչվում է ավտոմատ համակարգով,
-        // պահում ենք նույն միասնական ձևաչափով։
-        const detected = detectAutomaticMemory(value);
-
-        if (detected && detected.type === "preference") {
-            const match = detected.value.match(
-                /^իմ սիրելի\s+(.+?)\s+(.+?)\s+է$/iu
-            );
-
-            if (!match) return false;
-
-            const category = normalizePreferenceCategory(match[1]);
-            const newValue = cleanPreferenceWord(match[2]);
-
-            memory.preferences = memory.preferences.filter(item => {
-                const oldMatch = String(item)
-                    .replace(/[.!?։]+$/u, "")
-                    .match(/^իմ սիրելի\s+(.+?)\s+(.+?)\s+է$/iu);
-
-                if (!oldMatch) return true;
-
-                return normalizePreferenceCategory(oldMatch[1]) !== category;
-            });
-
-            addMemoryItem(
-                memory,
-                "preferences",
-                `Իմ սիրելի ${category} ${newValue} է`
-            );
-
-            return saveMemory(memory) ? "preference" : false;
-        }
-
-        const patterns = [
-            /^(?:իմ սիրելի .+|ես սիրում եմ .+|ինձ դուր է գալիս .+|իմ նախասիրությունն է .+)$/iu,
-            /^i (?:like|love) .+$/i,
-            /^my favorite .+ is .+$/i,
-            /^мне нравится .+$/i,
-            /^мой любимый .+$/i,
-            /^моя любимая .+$/i
-        ];
-
-        if (!patterns.some(pattern => pattern.test(value))) {
-            return false;
-        }
-
-        const normalized = normalizeText(value);
-
-        const exists = [
-            ...memory.facts,
-            ...memory.preferences
-        ].some(item => normalizeText(item) === normalized);
-
-        if (!exists) {
-            memory.preferences.push(value);
-
-            if (!saveMemory(memory)) return false;
-        }
-
-        return "preference";
-    }
-
-    // ==========================================
-    // EXPLICIT MEMORY
-    // ==========================================
-
-    function rememberProfile(message) {
-        if (!hasRememberCommand(message)) return false;
-
-        const cleaned = hasRememberCommand(message, true);
-        const memory = loadMemory();
-
-        return (
-            rememberName(cleaned, memory) ||
-            rememberPreference(cleaned, memory)
-        );
-    }
-
-    function rememberFact(message) {
-        if (!hasRememberCommand(message)) return false;
-
-        const fact = hasRememberCommand(message, true);
-
-        if (
-            !fact ||
-            fact.length < 2 ||
-            fact.length > 500 ||
-            SENSITIVE_PATTERN.test(fact)
-        ) {
-            return false;
-        }
-
-        const memory = loadMemory();
-
-        const exists = memory.facts.some(
-            item => normalizeText(item) === normalizeText(fact)
-        );
-
-        if (!exists) {
-            memory.facts.push(fact);
-
-            if (!saveMemory(memory)) return false;
-        }
-
-        return true;
-    }
-
-    // ==========================================
-    // MEMORY CONFIRMATION
-    // ==========================================
-
-    function askMemoryConfirmation(message) {
-        const text = String(message || "").trim();
-
-        if (
-            text.length < 5 ||
-            text.length > 500 ||
-            /[?？՞]$/.test(text) ||
-            SENSITIVE_PATTERN.test(text) ||
-            hasRememberCommand(text) ||
-            isForgetCommand(text)
-        ) {
-            return false;
-        }
-
-        const looksPersonal =
-            /^(?:ես|իմ)\s+.+(?:եմ|է|ունեմ|ունի)$/iu.test(
-                text.replace(/[.!։]+$/u, "").trim()
-            );
-
-        if (!looksPersonal) return false;
-
-        const memory = loadMemory();
-
-        memory.pending_memory = {
-            type: "fact",
-            value: text.replace(/[.!։]+$/u, "").trim()
+    if (detected.confidence < 0.90) {
+        return {
+            status: "confirmation",
+            detected
         };
-
-        return saveMemory(memory);
     }
 
-  
+    const memory = loadMemory();
+
+    const result = saveDetectedMemory(memory, detected);
+
+    if (result === "exists") return "exists";
+
+    if (result !== "saved" && result !== true) {
+        return false;
+    }
+
+    const saved = saveMemory(memory);
+
+    return saved ? "saved" : false;
+}
+/* =====================================================
+   PENDING MEMORY
+===================================================== */
+
+function setPendingMemory(detected) {
+    if (!detected) return false;
+
+    const memory = loadMemory();
+
+    memory.pending_memory = {
+        type: detected.type,
+        category: detected.category || null,
+        value: detected.value,
+        confidence: detected.confidence,
+        createdAt: Date.now()
+    };
+
+    return saveMemory(memory);
+}
 
 function handleMemoryConfirmation(message) {
     const text = normalizeText(message);
+
+    if (!text) return null;
+
+    const yes =
+        /^(այո|հա|իհարկե|հիշիր|պահիր|այո հիշիր|այո պահիր|yes|yeah|да|конечно)$/iu;
+
+    const no =
+        /^(ոչ|չէ|մի հիշիր|չպահես|ոչ մի հիշիր|no|nope|нет)$/iu;
+
+    if (!yes.test(text) && !no.test(text)) {
+        return null;
+    }
+
     const memory = loadMemory();
-
-    if (!memory.pending_memory) return null;
-
-    const yesPatterns = [
-        /^(?:այո|հա|իհարկե|լավ)(?:\s+(?:պահպանիր|պահիր|հիշիր|հիշիր սա))?$/u,
-        /^(?:պահպանիր|պահիր|հիշիր|հիշիր սա)$/u,
-        /^(?:yes|yeah|yes save it|save it|confirm)$/u,
-        /^(?:да|да сохрани|сохрани|подтверждаю)$/u
-    ];
-
-    const noPatterns = [
-        /^(?:ոչ|չէ)(?:\s+(?:մի պահպանիր|մի հիշիր))?$/u,
-        /^(?:մի պահպանիր|մի հիշիր)$/u,
-        /^(?:no|nope|no do not save|reject)$/u,
-        /^(?:нет|нет не сохраняй|не сохраняй)$/u
-    ];
-
-    const isYes = yesPatterns.some(p => p.test(text));
-    const isNo = noPatterns.some(p => p.test(text));
-
-    if (!isYes && !isNo) return null;
-
     const pending = memory.pending_memory;
 
-    // ՄԵՐԺՈՒՄ
-    if (isNo) {
-        memory.pending_memory = null;
+    if (!pending) return null;
 
+    // Նախ մաքրում ենք pending-ը։
+    memory.pending_memory = null;
+
+    if (no.test(text)) {
         return saveMemory(memory)
             ? "cancelled"
             : "error";
     }
 
-    // ՍՏՈՒԳՈՒՄ
-    if (
-        !pending ||
-        typeof pending.value !== "string" ||
-        !pending.value.trim() ||
-        pending.value.length > 500 ||
-        SENSITIVE_PATTERN.test(pending.value)
-    ) {
+    const result = saveDetectedMemory(memory, pending);
+
+    if (result === "exists") {
+        return saveMemory(memory)
+            ? "exists"
+            : "error";
+    }
+
+    if (result !== "saved" && result !== true) {
         return "error";
     }
 
-    let collection = null;
-
-    // ԱՆՈՒՆ
-    if (pending.type === "name") {
-        if (pending.value.length > 80) return "error";
-
-        memory.user_name = pending.value.trim();
-
-    } else {
-        const collections = {
-            fact: "facts",
-            interest: "interests",
-            device: "devices",
-            preference: "preferences"
-        };
-
-        collection = collections[pending.type];
-
-        if (!collection) return "error";
-
-        addMemoryItem(
-            memory,
-            collection,
-            pending.value.trim()
-        );
-    }
-
-    // ՄԱՔՐՈՒՄ ԵՆՔ PENDING-Ը
-    memory.pending_memory = null;
-
-    // ՊԱՀՊԱՆՈՒՄ ԵՆՔ ԱՄԲՈՂՋ ՓՈՓՈԽՈՒԹՅՈՒՆԸ
-    const saved = saveMemory(memory);
-
-    if (!saved) {
-        console.error("ZENIX: MEMORY APPROVAL SAVE FAILED!");
-        return "error";
-    }
-
-    console.log("ZENIX PENDING MEMORY APPROVED:", pending);
-
-    return "saved";
+    return saveMemory(memory)
+        ? "saved"
+        : "error";
 }
 
-function updateMemoryFact(message) {
-    const detected = detectAutomaticMemory(message);
+/* =====================================================
+   EXPLICIT REMEMBER COMMAND
+===================================================== */
 
-    const memory = loadMemory();
-
-    let result = false;
-
-    // FAVORITE PREFERENCES
-    if (detected && detected.type === "preference") {
-        result = rememberPreference(detected.value, memory);
-    }
-
-    // USER NAME
-    else if (detected && detected.type === "name") {
-        result = rememberName(detected.value, memory);
-    }
-
-    // INTERESTS
-    else {
-        result = rememberInterest(message);
-    }
-
-    if (result) {
-        const updatedMemory = loadMemory();
-        updatedMemory.pending_memory = null;
-
-        if (!saveMemory(updatedMemory)) {
-            return false;
-        }
-    }
-
-    return result;
-}
-
-function updateMemoryFact(message) {
-    const detected = detectAutomaticMemory(message);
-
-    const memory = loadMemory();
-
-    let result = false;
-
-    // FAVORITE PREFERENCES
-    if (detected && detected.type === "preference") {
-        result = rememberPreference(detected.value, memory);
-    }
-
-    // USER NAME
-    else if (detected && detected.type === "name") {
-        result = rememberName(detected.value, memory);
-    }
-
-    // INTERESTS
-    else {
-        result = rememberInterest(message);
-    }
-
-    if (result) {
-        const updatedMemory = loadMemory();
-        updatedMemory.pending_memory = null;
-
-        if (!saveMemory(updatedMemory)) {
-            return false;
-        }
-    }
-
-    return result;
-}
-
-
-
-
-    // ==========================================
-    // UPDATE MEMORY FACT
-    // ==========================================
-
-
-function updateFuturePreference(message) {
-    const futureMatch = String(message || "")
-        .normalize("NFC")
-        .trim()
-        .replace(
-            /\s*պահպանիր\s+այս\s+փոփոխությունը[.!?։]*$/iu,
-            ""
-        )
-        .match(
-            /^այսուհետ\s+իմ\s+սիրելի\s+(.+?)\s+(.+?)\s+է\s*,?\s*ոչ\s+թե\s+(.+?)[.!?։]*$/iu
-        );
-
-    if (!futureMatch) return false;
-
-    const category = normalizePreferenceCategory(futureMatch[1]);
-    const newValue = cleanPreferenceWord(futureMatch[2])
-        .replace(/(?:ը|ն)$/u, "");
-    const oldValue = normalizeText(futureMatch[3])
-        .replace(/(?:ը|ն)$/u, "");
-
-    if (
-        !category ||
-        !newValue ||
-        !oldValue ||
-        normalizeText(newValue) === oldValue ||
-        newValue.length > 100 ||
-        SENSITIVE_PATTERN.test(newValue)
-    ) {
-        return false;
-    }
-
-    const memory = loadMemory();
-
-    const preferenceRegex =
-        /^իմ սիրելի\s+(.+?)\s+(.+?)\s+է$/iu;
-
-    const exists = memory.preferences.some(item => {
-        const match = String(item)
-            .replace(/[.!?։]+$/u, "")
-            .match(preferenceRegex);
-
-        return (
-            match &&
-            normalizePreferenceCategory(match[1]) === category &&
-            normalizeText(match[2]) === oldValue
-        );
-    });
-
-    if (!exists) return false;
-
-    memory.preferences = memory.preferences.filter(item => {
-        const match = String(item)
-            .replace(/[.!?։]+$/u, "")
-            .match(preferenceRegex);
-
-        return !(
-            match &&
-            normalizePreferenceCategory(match[1]) === category
-        );
-    });
-
-    addMemoryItem(
-        memory,
-        "preferences",
-        `Իմ սիրելի ${category} ${newValue} է`
-    );
-
-    memory.pending_memory = null;
-
-    if (!saveMemory(memory)) return false;
-
-    console.log("ZENIX FUTURE PREFERENCE UPDATED:", {
-        category,
-        oldValue,
-        newValue
-    });
-
-    return true;
-}
-
-
-
-    // ==========================================
-    // FORGET MEMORY
-    // ==========================================
-
-  function isForgetCommand(message) {
-    return /^\s*(?:մոռացիր|մոռացի|ջնջիր հիշողությունից|forget|забудь|удали из памяти)(?:\s|[,՝:]|$)/iu
-        .test(String(message || ""));
-}
-   
-
-function forgetFact(message) {
-    if (!isForgetCommand(message)) return false;
-
+function hasRememberCommand(message) {
     const text = String(message || "").trim();
 
-    const forgetAll =
-        /^(?:մոռացիր ամեն ինչ|մոռացիր բոլորը|ջնջիր ամբողջ հիշողությունը|forget everything|forget all|забудь всё|удали всю память)[.!?։]*$/iu;
+    return /^(?:հիշիր|հիշի|պահիր հիշողության մեջ|պահպանիր այս տեղեկությունը|remember(?:\s+that)?|запомни(?:\s+что)?)(?=\s|[,՝:]|$)/iu.test(text);
+}
 
+function cleanRememberCommand(message) {
+    return String(message || "")
+        .replace(
+    /^(?:հիշիր|հիշի|hishir|hishi|պահիր հիշողության մեջ|պահպանիր այս տեղեկությունը|remember(?:\s+that)?|запомни(?:\s+что)?)[\s,՝:]*/iu,
+    ""
+)
+        
+        .trim();
+}
+
+/* =====================================================
+   MEMORY FORGET
+===================================================== */
+
+function isForgetCommand(message) {
+    return /^(?:մոռացիր|ջնջիր(?:\s+հիշողությունից)?|մոռացիր իմ մասին|forget|forget that|забудь|удали из памяти)(?=\s|[,՝:]|$)/iu.test(
+        String(message || "").trim()
+    );
+}
+
+
+async function forgetFact(message) {
     const memory = loadMemory();
+    const text = String(message || "").trim();
+
+    if (!text) return false;
+
+    const collections = [
+        "facts", "preferences", "interests",
+        "devices", "goals", "projects",
+        "games", "tasks"
+    ];
+
+ 
+const forgetAll =
+    /^(?:մոռացիր\s+(?:ամեն ինչ|ամբողջ հիշողությունդ|ամբողջ հիշողությունը|ամբողջ հիշողությունս)|ջնջիր\s+(?:ամեն ինչ|ամբողջ հիշողությունը)|forget\s+everything|забудь\s+всё)[.!?։]*$/iu;
 
     if (forgetAll.test(text)) {
-        return saveMemory(emptyMemory()) ? "all" : "error";
+        for (const collection of collections) {
+            memory[collection] = [];
+        }
+
+        memory.user_name = "";
+        memory.youtube_channel = "";
+        memory.pending_memory = null;
+
+        return saveMemory(memory) ? "all" : "error";
     }
 
-    const target = text
+    // Պաշտպանություն. սովորական հաղորդագրությունները
+    // չպետք է ջնջման հրաման համարվեն։
+    const forgetCommand =
+        /^(?:մոռացիր|ջնջիր(?:\s+հիշողությունից)?|forget|забудь|удали(?:\s+из памяти)?)(?:\s|$)/iu;
+
+    if (!forgetCommand.test(text)) return false;
+
+    let target = text
         .replace(
-            /^\s*(?:մոռացիր|մոռացի|ջնջիր հիշողությունից|forget|забудь|удали из памяти)\s*[,՝:]?\s*/iu,
+            /^(?:մոռացիր|ջնջիր(?:\s+հիշողությունից)?|forget|забудь|удали(?:\s+из памяти)?)[\s,՝:]*/iu,
             ""
         )
-        .replace(/^\s*(?:որ|that|что)\s+/iu, "")
         .replace(/[.!?։]+$/u, "")
+        .trim();
+
+    target = target
+        .replace(/^որ\s+/u, "")
+        .replace(/^ես\s+/u, "")
+        .replace(/^(?:սիրում եմ|խաղում եմ|ունեմ)\s+/u, "")
         .trim();
 
     if (!target) return false;
 
-    const normalizeWords = (value) =>
-        normalizeText(value)
-            .split(/\s+/u)
-            .map(word => word.replace(/[ը ն]$/u, ""))
-            .filter(Boolean);
+    const normalizedTarget = normalizeText(target);
 
-    const ignoredWords = new Set([
-        "իմ", "սիրելի", "մի", "է", "եմ", "ես",
-        "the", "my", "favorite", "favourite"
-    ]);
+    const categories = [
+        { name: "color", pattern: /գույն(?:ը|ի|ս)?/u },
+        { name: "fruit", pattern: /միրգ(?:ը|ի|ս|յ)?/u },
+        { name: "sport", pattern: /սպորտ(?:աձևը|աձևի|ի)?|բոքս/u },
+        { name: "animal", pattern: /կենդանի(?:ն|ը|ի|ս)?|կատու|շուն/u },
+        { name: "car", pattern: /մեքենա(?:ն|ը|յի|ի|ս)?|ավտոմեքենա/u },
+        { name: "game", pattern: /խաղ(?:ը|ի|ս)?/u },
+        { name: "music", pattern: /երաժշտություն(?:ը|ի|ս)?/u },
+        { name: "food", pattern: /ուտելիք(?:ը|ի|ս)?|սնունդ(?:ը|ի)?/u }
+    ];
 
-    const targetWords = normalizeWords(target)
-        .filter(word => !ignoredWords.has(word));
+    const matchedCategory = categories.find(category =>
+        category.pattern.test(normalizedTarget)
+    );
 
-    if (!targetWords.length) return "not_found";
+    let targetGameKey = "";
 
-    let found = false;
-
-    if (
-        normalizeWords(memory.user_name || "")
-            .join(" ") === targetWords.join(" ")
-    ) {
-        memory.user_name = "";
-        found = true;
-    }
-
-    for (const collection of [
-        memory.facts,
-        memory.preferences,
-        memory.interests,
-        memory.devices
-    ]) {
-        for (let i = collection.length - 1; i >= 0; i--) {
-            const savedWords = normalizeWords(collection[i]);
-
-            const matches = targetWords.every(word =>
-                savedWords.includes(word)
+    // Խաղի ճանաչում Gemini-ով
+    if (!matchedCategory || matchedCategory.name === "game") {
+        try {
+            const analysis = await analyzeMemoryWithGemini(
+                "Հիշիր, որ սիրում եմ " + target
             );
 
-            if (matches) {
-                collection.splice(i, 1);
-                found = true;
+            if (
+                analysis &&
+                analysis.type === "game" &&
+                typeof analysis.value === "string" &&
+                analysis.confidence >= 0.75
+            ) {
+                targetGameKey = normalizeGame(analysis.value);
             }
+        } catch (error) {
+            console.error(
+                "GAME FORGET ANALYSIS ERROR:",
+                error.message
+            );
+
+            return "error";
         }
     }
 
-    if (!found) return "not_found";
+    let removed = false;
+
+    for (const collection of collections) {
+        if (!Array.isArray(memory[collection])) continue;
+
+        const before = memory[collection].length;
+
+        memory[collection] = memory[collection].filter(item => {
+            const normalizedItem = normalizeText(
+                String(item || "")
+            );
+
+            if (!normalizedItem) return true;
+
+            // Խաղերի ճշգրիտ համեմատություն
+            if (collection === "games") {
+                if (!targetGameKey) return true;
+
+                return normalizeGame(item) !== targetGameKey;
+            }
+
+            // Նախասիրության կատեգորիայի ջնջում
+            if (
+                matchedCategory &&
+                collection === "preferences" &&
+                matchedCategory.pattern.test(normalizedItem)
+            ) {
+                return false;
+            }
+
+            // Մնացած հիշողությունների ջնջում
+            if (
+                normalizedItem === normalizedTarget ||
+                normalizedItem.includes(normalizedTarget)
+            ) {
+                return false;
+            }
+
+            return true;
+        });
+
+        if (memory[collection].length < before) {
+            removed = true;
+        }
+    }
+
+    // Անվան ջնջում
+    if (
+        /անուն(?:ս|ը|ի)?/u.test(normalizedTarget) &&
+        memory.user_name
+    ) {
+        memory.user_name = "";
+        removed = true;
+    }
+
+    // YouTube ալիքի ջնջում
+    if (
+        /youtube|յություբ|ալիք/u.test(normalizedTarget) &&
+        memory.youtube_channel
+    ) {
+        memory.youtube_channel = "";
+        removed = true;
+    }
+
+    console.log("FORGET RESULT:", {
+        target,
+        targetGameKey,
+        games: memory.games,
+        removed
+    });
+
+    if (!removed) {
+        return "not_found";
+    }
 
     return saveMemory(memory) ? true : "error";
 }
 
-    // ==========================================
-    // MEMORY QUESTIONS
-    // ==========================================
 
-    function isMemoryQuestion(message) {
-        const text = normalizeText(message);
 
-        const patterns = [
-            /ինչ տեղեկություններ ես հիշում/,
-            /ինչ ես հիշում իմ մասին/,
-            /ինչ գիտես իմ մասին/,
-            /թվարկիր.*հիշող/,
-            /ինչ է պահպանված հիշողության/,
-            /ինչ ես պահպանել իմ մասին/,
-            /ինչ ես հիշում/,
-            /ինչ տեղեկություններ գիտես իմ մասին/,
-            /թվարկիր իմ մասին պահպանված տվյալները/,
-            /ինչ ես պահպանել/,
-            /ասա իմ մասին հիշածդ/,
-            /հիշողությունդ ցույց տուր/,
-            /what do you remember about me/,
-            /what do you know about me/,
-            /show my memories/,
-            /list my memories/,
-            /что ты помнишь обо мне/,
-            /что ты знаешь обо мне/,
-            /покажи мои воспоминания/
-        ];
+function normalizeGame(value) {
+    let text = String(value || "")
+        .toLowerCase()
+        .normalize("NFC")
+        .replace(/[։.,!?՝'"`()\[\]{}]/gu, " ")
+        .replace(/[-_]/gu, " ")
+        .replace(/\s+/gu, " ")
+        .trim();
 
-        return patterns.some(pattern => pattern.test(text));
+    if (!text) return "";
+
+    // Հեռացնում ենք հրամանի բառերը
+    text = text
+        .replace(/^(?:հիշիր|մոռացիր|ջնջիր|պահպանիր)\s+/u, "")
+        .replace(/^(?:remember|forget|delete)\s+/iu, "")
+        .replace(/^(?:որ\s+)?ես\s+/u, "")
+        .replace(/^(?:խաղում եմ|սիրում եմ)\s+/u, "")
+        .trim();
+
+    // Հեռացնում ենք հայերեն վերջավոր հոդերը
+    text = text.replace(/(?:ը|ն|ս)$/u, "").trim();
+
+    // Միասնականացնում ենք բացատները
+    text = text
+        .replace(/\s+/gu, " ")
+        .trim();
+
+    return text;
+}
+
+
+
+
+/* =====================================================
+   UPDATE FUTURE PREFERENCE
+===================================================== */
+// ===============================
+// ZENIX GAME NORMALIZATION TESTS
+// ===============================
+
+console.log("\n========== END GAME TEST ==========\n");
+function updateFuturePreference(message) {
+    const memory = loadMemory();
+    const text = String(message || "").trim();
+
+    if (!text) return false;
+
+    const patterns = [
+        /^(?:այսուհետ|այսուհետից|հետայսու|from now on|с этого момента)\s+(.+?)$/iu,
+        /^(?:նախընտրում եմ|ուզում եմ այսուհետ)\s+(.+?)$/iu
+    ];
+
+    let value = null;
+
+    for (const pattern of patterns) {
+        const match = text.match(pattern);
+
+        if (match) {
+            value = match[1].trim();
+            break;
+        }
     }
 
-    // ==========================================
-    // MEMORY SUMMARY
-    // ==========================================
+    if (!value || isSensitiveMemory(value)) return false;
 
-    
+    const saved = addMemoryItem(
+        memory,
+        "preferences",
+        `Ապագա նախընտրություն: ${value}`
+    );
+
+    return saved && saved !== "exists"
+        ? saveMemory(memory)
+        : saved === "exists";
+}
+
+/* =====================================================
+   MEMORY SUMMARY
+===================================================== */
+
+
 function getMemorySummary(memory) {
-    const sections = [];
+    const lines = [];
+
+    if (!memory || typeof memory !== "object") {
+        return "Դեռ պահպանված հիշողություններ չկան։";
+    }
 
     if (memory.user_name) {
-        sections.push(`Անուն՝ ${memory.user_name}`);
+        lines.push(`Անուն՝ ${memory.user_name}`);
     }
 
     if (memory.youtube_channel) {
-        sections.push(`YouTube ալիք՝ ${memory.youtube_channel}`);
+        lines.push(`YouTube ալիք՝ ${memory.youtube_channel}`);
     }
 
-    const categories = [
-        ["Փաստեր", memory.facts],
-        ["Նախասիրություններ", memory.preferences],
-        ["Հետաքրքրություններ", memory.interests],
-        ["Սարքեր", memory.devices]
+    const sections = [
+        ["preferences", "Նախասիրություններ"],
+        ["interests", "Հետաքրքրություններ"],
+        ["facts", "Փաստեր"],
+        ["devices", "Սարքեր"],
+        ["goals", "Նպատակներ"],
+        ["projects", "Նախագծեր"],
+        ["games", "Խաղեր"],
+        ["tasks", "Առաջադրանքներ"]
     ];
 
-    for (const [title, items] of categories) {
-        if (Array.isArray(items) && items.length > 0) {
-            sections.push(
-                `${title}՝\n${items.map(item => "- " + item).join("\n")}`
+    for (const [key, title] of sections) {
+        const items = Array.isArray(memory[key])
+            ? memory[key].filter(
+                item => typeof item === "string" && item.trim()
+            )
+            : [];
+
+        if (items.length) {
+            lines.push(
+                `${title}՝ ${items.join(", ")}`
             );
         }
     }
 
-    if (!sections.length) {
-        return "Հիշողությանս մեջ դեռ տեղեկություններ չկան։";
-    }
-
-    return "Ահա իմ հիշողության մեջ պահպանված տեղեկությունները․\n\n" +
-        sections.join("\n\n");
+    return lines.length
+        ? lines.join("\n")
+        : "Դեռ պահպանված հիշողություններ չկան։";
 }
 
-    // ==========================================
-    // MEMORY ANSWERS
-    // ==========================================
 
-    function getMemoryAnswer(memory, language, question = "") {
-        const text = normalizeText(question);
+/* =====================================================
+   MEMORY ANSWERS
+===================================================== */
 
-        const preferences = Array.isArray(memory.preferences)
-            ? memory.preferences
-            : [];
 
-        function getLatestPreference(category) {
-            for (let i = preferences.length - 1; i >= 0; i--) {
-                const normalized = normalizeText(preferences[i]);
+function getMemoryAnswer(memory, language, question = "") {
+    const text = normalizeText(question);
 
-                const match = normalized.match(
-                    /^իմ սիրելի\s+(.+?)\s+(.+?)\s+է$/u
-                );
+    memory = memory && typeof memory === "object"
+        ? memory
+        : {};
 
-                if (!match) continue;
+    console.log("ORIGINAL QUESTION:", question);
+    console.log("NORMALIZED QUESTION:", text);
 
-                if (
-                    normalizePreferenceCategory(match[1]) ===
-                    normalizePreferenceCategory(category)
-                ) {
-                    return match[2].trim();
-                }
-            }
+    const hasAny = (...words) =>
+        words.some(word => text.includes(word));
 
-            return null;
+    const categories = [
+        {
+            key: "games",
+            title: "Խաղեր",
+            words: ["խաղ", "խաղեր", "games", "game"]
+        },
+        {
+            key: "tasks",
+            title: "Առաջադրանքներ",
+            words: ["առաջադրանք", "անելիք", "tasks", "task"]
+        },
+        {
+            key: "preferences",
+            title: "Նախասիրություններ",
+            words: ["նախասիր", "սիրելի", "preferences"]
+        },
+        {
+            key: "interests",
+            title: "Հետաքրքրություններ",
+            words: ["հետաքրքր", "interests"]
+        },
+        {
+            key: "facts",
+            title: "Փաստեր",
+            words: ["փաստ", "տեղեկություն", "facts"]
+        },
+        {
+            key: "devices",
+            title: "Սարքեր",
+            words: ["սարք", "հեռախոս", "համակարգիչ", "devices"]
+        },
+        {
+            key: "goals",
+            title: "Նպատակներ",
+            words: ["նպատակ", "goals"]
+        },
+        {
+            key: "projects",
+            title: "Նախագծեր",
+            words: ["նախագիծ", "նախագծեր", "projects"]
         }
+    ];
 
-        // FAVORITE GAME
-        if (
-            /սիրելի խաղ|ինչ խաղ եմ սիրում|favorite game|любимая игра/.test(text)
-        ) {
-            const game = getLatestPreference("խաղ");
-
-            return game
-                ? reply(
-                    `Քո սիրելի խաղը ${game} է։ ❤️`,
-                    `Твоя любимая игра — ${game}. ❤️`,
-                    `Your favorite game is ${game}. ❤️`,
-                    language
-                )
-                : null;
-        }
-
-        // FAVORITE COLOR
-        if (
-            /սիրելի գույն|ինչ գույն եմ սիրում|favorite color|любимый цвет/.test(text)
-        ) {
-            const color = getLatestPreference("գույն");
-
-            return color
-                ? reply(
-                    `Քո սիրելի գույնը ${color} է։ 💚`,
-                    `Твой любимый цвет — ${color}. 💚`,
-                    `Your favorite color is ${color}. 💚`,
-                    language
-                )
-                : null;
-        }
-
-        // FAVORITE ANIMAL
-        if (
-            /սիրելի կենդանի|ինչ կենդանի եմ սիրում|favorite animal|любимое животное/.test(text)
-        ) {
-            const animal = getLatestPreference("կենդանի");
-
-            return animal
-                ? reply(
-                    `Քո սիրելի կենդանին ${animal} է։ 🐶`,
-                    `Твоё любимое животное — ${animal}. 🐶`,
-                    `Your favorite animal is ${animal}. 🐶`,
-                    language
-                )
-                : null;
-        }
-
-        // FAVORITE FRUIT
-        if (
-            /սիրելի միրգ|ինչ միրգ եմ սիրում|favorite fruit|любимый фрукт|любимый плод/.test(text)
-        ) {
-            const fruit = getLatestPreference("միրգ");
-
-            return fruit
-                ? reply(
-                    `Քո սիրելի միրգը ${fruit} է։ ❤️`,
-                    `Твой любимый фрукт — ${fruit}. ❤️`,
-                    `Your favorite fruit is ${fruit}. ❤️`,
-                    language
-                )
-                : null;
-        }
-
-        // FAVORITE MUSIC
-        if (
-            /սիրելի երաժշտություն|favorite music|любимая музыка/.test(text)
-        ) {
-            const music = getLatestPreference("երաժշտություն");
-
-            return music
-                ? reply(
-                    `Քո սիրելի երաժշտությունը ${music} է։ 🎵`,
-                    `Твоя любимая музыка — ${music}. 🎵`,
-                    `Your favorite music is ${music}. 🎵`,
-                    language
-                )
-                : null;
-        }
-
-        // FAVORITE SPORT
-        if (
-            /սիրելի սպորտ|favorite sport|любимый спорт/.test(text)
-        ) {
-            const sport = getLatestPreference("սպորտ");
-
-            return sport
-                ? reply(
-                    `Քո սիրելի սպորտը ${sport} է։ ⚽`,
-                    `Твой любимый спорт — ${sport}. ⚽`,
-                    `Your favorite sport is ${sport}. ⚽`,
-                    language
-                )
-                : null;
-        }
-
+  const questionAboutMemory =
+    hasAny(
+        "ինչ",
+        "ինչ՞",
+        "ի՞նչ",
+        "որ",
+        "թվարկիր",
+        "հիշում",
+        "պահպանված"
+    );
+    if (!questionAboutMemory) {
         return null;
     }
 
-    // ==========================================
-    // MEMORY STATUS API
-    // ==========================================
+    // Անուն
+    if (hasAny("անուն", "ով եմ")) {
+        return memory.user_name
+            ? `Քո անունը ${memory.user_name} է։ ❤️`
+            : "Քո անունը դեռ չեմ հիշում։";
+    }
 
-    
+    // YouTube ալիք
+    if (hasAny("youtube", "յություբ")) {
+        return memory.youtube_channel
+            ? `Քո YouTube ալիքն է՝ ${memory.youtube_channel}։ ❤️`
+            : "YouTube ալիք դեռ չեմ հիշում։";
+    }
+
+    // Առանձին հիշողության բաժին
+   // Անհատական նախասիրությունների պատասխաններ
+const preferenceQuestions = [
+    {
+        key: "մեքենա",
+        words: ["մեքենա", "ավտոմեքենա"]
+    },
+    {
+        key: "միրգ",
+        words: ["միրգ", "մրգ"]
+    },
+    {
+        key: "սպորտ",
+        words: ["սպորտ", "բոքս", "բռնցքամարտ"]
+    },
+    {
+        key: "կենդանի",
+        words: ["կենդանի", "կատու", "շուն"]
+    },
+    {
+        key: "գույն",
+        words: ["գույն"]
+    }
+];
+
+const preferenceQuestion = preferenceQuestions.find(item =>
+    hasAny(...item.words)
+);
+
+if (preferenceQuestion) {
+    const saved = Array.isArray(memory.preferences)
+        ? memory.preferences.find(item =>
+            normalizeText(item).startsWith(
+                normalizeText(preferenceQuestion.key) + ":"
+            )
+        )
+        : null;
+
+    if (saved) {
+        const value = saved.substring(saved.indexOf(":") + 1).trim();
+
+        return `Քո սիրելի ${preferenceQuestion.key}ը ${value} է։ ❤️`;
+    }
+}
+
+    if (category) {
+        const items = Array.isArray(memory[category.key])
+            ? memory[category.key].filter(
+                item => typeof item === "string" && item.trim()
+            )
+            : [];
+
+        console.log(
+            "MEMORY CATEGORY:",
+            category.key,
+            "COUNT:",
+            items.length
+        );
+
+        if (items.length === 0) {
+            return `Առայժմ պահպանված ${category.title.toLowerCase()} չեմ հիշում։`;
+        }
+
+        return `Ահա քո մասին հիշած ${category.title.toLowerCase()}ը։ ❤️
+
+${items.map((item, index) =>
+            `${index + 1}. ${item}`
+        ).join("\n")}`;
+    }
+
+    // Ամբողջ հիշողության ամփոփում
+    if (
+        hasAny("հիշում", "հիշող", "պահպանված") &&
+        hasAny("իմ մասին", "տեղեկություն", "հիշողություն")
+    ) {
+        return getMemorySummary(memory);
+    }
+
+    return null;
+}
 
 
+/* =====================================================
+   GOOGLE NEWS
+===================================================== */
+
+async function searchGoogleNews(query) {
+    try {
+        const originalQuery = String(query || "")
+            .normalize("NFC")
+            .trim();
+
+        const isGTA6Query =
+            /\bGTA\s*[- ]?\s*6\b|Grand Theft Auto\s*(?:VI|6)\b/i
+                .test(originalQuery);
+
+        const searchQuery = isGTA6Query
+            ? '"GTA 6"'
+            : originalQuery;
+
+        if (!searchQuery) return [];
+
+        const params = new URLSearchParams({
+            q: searchQuery,
+            hl: "en-US",
+            gl: "US",
+            ceid: "US:en"
+        });
+
+        const response = await fetch(
+            "https://news.google.com/rss/search?" +
+            params.toString(),
+            {
+                headers: {
+                    "User-Agent": "Mozilla/5.0 ZENIX/1.0",
+                    "Accept": "application/rss+xml, application/xml, text/xml"
+                },
+                signal: AbortSignal.timeout(15000)
+            }
+        );
+
+        if (!response.ok) {
+            throw new Error("News search failed: " + response.status);
+        }
+
+        const xml = await response.text();
+
+        function decodeXML(value) {
+            return String(value || "")
+                .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+                .replace(/&amp;/g, "&")
+                .replace(/&quot;/g, '"')
+                .replace(/&#39;|&apos;/g, "'")
+                .replace(/&lt;/g, "<")
+                .replace(/&gt;/g, ">")
+                .replace(/&#(\d+);/g, (_, code) =>
+                    String.fromCodePoint(Number(code))
+                )
+                .replace(/&#x([0-9a-f]+);/gi, (_, code) =>
+                    String.fromCodePoint(parseInt(code, 16))
+                )
+                .trim();
+        }
+
+        function getValue(item, tag) {
+            const regex = new RegExp(
+                `<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`,
+                "i"
+            );
+
+            const match = item.match(regex);
+
+            return match ? decodeXML(match[1]) : "";
+        }
+
+        function getSourceUrl(item) {
+            const match = item.match(
+                /<source\b[^>]*\burl=["']([^"']+)["']/i
+            );
+
+            return match ? decodeXML(match[1]) : "";
+        }
+
+        const items = xml.match(
+            /<item\b[^>]*>[\s\S]*?<\/item>/gi
+        ) || [];
+
+        let results = items.map(item => ({
+            title: getValue(item, "title"),
+            link: getValue(item, "link"),
+            date: getValue(item, "pubDate"),
+            source: getValue(item, "source"),
+            sourceUrl: getSourceUrl(item)
+        }));
+
+        results = results.filter(item => {
+            if (!item.title || !item.link) return false;
+
+            if (isGTA6Query) {
+                const gtaPattern =
+                    /\bGTA\s*[- ]?\s*6\b|\bGrand Theft Auto\s*(?:VI|6)\b/i;
+
+                const match = item.title.match(gtaPattern);
+
+                if (!match || match.index > 35) return false;
+
+                const excluded = [
+                    /air force 1/i,
+                    /10 things that have happened in f1/i,
+                    /before we got gta 6/i
+                ];
+
+                if (excluded.some(pattern => pattern.test(item.title))) {
+                    return false;
+                }
+            }
+
+            return true;
+        });
+
+        const unique = [
+            ...new Map(
+                results.map(item => [item.link, item])
+            ).values()
+        ];
+
+        unique.sort((a, b) =>
+            (Date.parse(b.date) || 0) -
+            (Date.parse(a.date) || 0)
+        );
+
+        return unique.slice(0, 10);
+
+    } catch (error) {
+        console.error("ZENIX NEWS ERROR:", error.message);
+        return [];
+    }
+}
+
+function getNewsPublicationDate(date) {
+    if (!date) return "Ամսաթիվը նշված չէ";
+
+    const parsed = new Date(date);
+
+    if (isNaN(parsed.getTime())) {
+        return "Ամսաթիվը հնարավոր չէ ստուգել";
+    }
+
+    return parsed.toISOString();
+}
+
+function getNewsSourceStatus(item) {
+    const officialDomains = [
+        "rockstargames.com",
+        "take2games.com"
+    ];
+
+    try {
+        const hostname = new URL(item.sourceUrl).hostname
+            .toLowerCase()
+            .replace(/^www\./, "");
+
+        if (officialDomains.some(domain =>
+            hostname === domain ||
+            hostname.endsWith("." + domain)
+        )) {
+            return "OFFICIAL DOMAIN - ARTICLE CONTENT NOT VERIFIED";
+        }
+    } catch {}
+
+    return "MEDIA REPORT - NOT OFFICIALLY VERIFIED";
+}
+
+function buildNewsContext(newsResults) {
+    if (!newsResults.length) {
+        return `
+Google News-ը արդյունքներ չի վերադարձրել։
+Մի հորինիր նորություններ։
+Հստակ ասա, որ որոնումը արդյունք չի տվել։
+`;
+    }
+
+    const articles = newsResults.map((item, index) => [
+        `${index + 1}. TITLE: ${item.title}`,
+        `LINK: ${item.link}`,
+        `PUBLICATION DATE: ${getNewsPublicationDate(item.date)}`,
+        `SOURCE: ${item.source || "Unknown"}`,
+        `SOURCE URL: ${item.sourceUrl || "Unknown"}`,
+        `SOURCE STATUS: ${getNewsSourceStatus(item)}`,
+        "ARTICLE CONTENT: NOT PROVIDED"
+    ].join("\n")).join("\n\n");
+
+    return `
+GOOGLE NEWS SEARCH RESULTS:
+
+${articles}
+
+RULES:
+- Մի հորինիր հոդվածների բովանդակություն։
+- Տարբերակիր պաշտոնական և լրատվական հաղորդումները։
+- Վերնագիրը ապացույց չէ։
+- Ցույց տուր հրապարակման ամսաթիվը։
+- Նշիր աղբյուրի հղումը։
+- Մի ներկայացրու հին լուրը որպես այսօրվա նորություն։
+- Մի պնդիր, որ Rockstar-ը հաստատել է տեղեկությունը,
+  եթե դրա իրական պաշտոնական ապացույցը չկա։
+`;
+}
+
+/* =====================================================
+   NAME USAGE CONTROL
+===================================================== */
+
+const nameUsage = new Map();
+
+function canUseUserName(sessionId) {
+    if (!sessionId) return false;
+
+    const now = Date.now();
+    const lastUsed = nameUsage.get(sessionId) || 0;
+
+    if (now - lastUsed < 60000) return false;
+
+    nameUsage.set(sessionId, now);
+
+    return true;
+}
+
+/* =====================================================
+   GEMINI CHAT
+===================================================== */
+
+async function askGemini(history, memory) {
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+        throw new Error("GEMINI_API_KEY is missing in .env");
+    }
+
+    const contents = history
+        .filter(item =>
+            item &&
+            ["user", "model"].includes(item.role) &&
+            typeof item.text === "string"
+        )
+        .slice(-20)
+        .map(item => ({
+            role: item.role,
+            parts: [{ text: item.text }]
+        }));
+
+    const systemPrompt = `
+Դու ZENIX-ն ես՝ հայկական AI օգնական։
+
+Պատասխանիր բնական, ընկերական և կարճ հայերենով։
+Օգտագործիր դու/քո/քեզ ձևերը։
+Հասկացիր նաև լատինատառ հայերենը։
+Հիշիր խոսակցության համատեքստը։
+Մի հորինիր օգտատիրոջ մասին տեղեկություններ։
+
+Օգտատիրոջ անունը՝ ${memory.user_name || "անհայտ"}։
+
+YouTube ալիք՝ ${memory.youtube_channel || "անհայտ"}։
+
+Պահպանված փաստեր՝
+${memory.facts.join("\n")}
+
+Նախասիրություններ՝
+${memory.preferences.join("\n")}
+
+Հետաքրքրություններ՝
+${memory.interests.join("\n")}
+
+Սարքեր՝
+${memory.devices.join("\n")}
+
+Հիշողության տվյալներն օգտագործիր միայն համապատասխան հարցերի դեպքում։
+Մի հորինիր բացակայող տեղեկություններ։
+Մի ասա, որ հիշողություն ես պահպանել, եթե այն իրականում չի պահպանվել։
+`;
+
+    const response = await fetch(
+        GEMINI_URL + encodeURIComponent(apiKey),
+        {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+                systemInstruction: {
+                    parts: [{ text: systemPrompt }]
+                },
+                contents,
+                generationConfig: {
+                    temperature: 0.7,
+                    maxOutputTokens: 2048
+                }
+            }),
+            signal: AbortSignal.timeout(60000)
+        }
+    );
+
+    const responseText = await response.text();
+
+    let data;
+
+    try {
+        data = JSON.parse(responseText);
+    } catch {
+        console.error("GEMINI NON-JSON:", responseText);
+
+        throw new Error("Gemini returned invalid JSON.");
+    }
+
+    if (!response.ok) {
+        console.error("GEMINI ERROR:", data);
+
+        throw new Error(
+            data.error?.message || "Gemini API error"
+        );
+    }
+
+    const answer = data.candidates?.[0]?.content?.parts
+        ?.map(part => part.text || "")
+        .join("")
+        .trim();
+
+    if (!answer) {
+        throw new Error("Gemini returned an empty response.");
+    }
+
+    return answer;
+}
+
+/* =====================================================
+   API CHAT
+===================================================== */
 
 app.post("/api/chat", async (req, res) => {
     try {
@@ -1377,19 +2303,13 @@ app.post("/api/chat", async (req, res) => {
             });
         }
 
-        const apiKey = process.env.GEMINI_API_KEY;
-
-        if (!apiKey) {
-            return res.status(500).json({
-                error: "GEMINI_API_KEY is missing in .env"
-            });
-        }
-
         const lastMessage = [...history]
             .reverse()
-            .find(item => item.role === "user");
+            .find(item => item && item.role === "user");
 
-        const userMessage = String(lastMessage?.text || "").trim();
+        const userMessage = String(
+            lastMessage?.text || ""
+        ).trim();
 
         if (!userMessage) {
             return res.status(400).json({
@@ -1397,65 +2317,26 @@ app.post("/api/chat", async (req, res) => {
             });
         }
 
+        console.log("ZENIX USER:", userMessage);
+
         let memory = loadMemory();
 
-        // ======================================
-        // FORGET COMMANDS
-        // ======================================
+        /* ======================================
+           1. PENDING CONFIRMATION
+        ====================================== */
 
-        if (isForgetCommand(userMessage)) {
-            const result = forgetFact(userMessage);
-
-            const replies = {
-                all: "Քո ամբողջ հիշողությունը մաքրվել է։ ❤️",
-                not_found: "Այդ տեղեկությունը հիշողությանս մեջ չգտա։",
-                error: "Չհաջողվեց թարմացնել հիշողությունը։"
-            };
-
-            return res.json({
-                reply: typeof result === "string"
-                    ? replies[result]
-                    : result
-                        ? "Տեղեկությունը մոռացվեց։ ❤️"
-                        : "Չհաջողվեց կատարել հրամանը։"
-            });
-        }
-
-        // ======================================
-        // UPDATE MEMORY
-        // ======================================
-
-       if (updateFuturePreference(userMessage)) {
-    return res.json({
-        reply: "Հիշողությունս հաջողությամբ թարմացրի։ ❤️"
-    });
-}
-
-        if (updateMemoryFact(userMessage)) {
-            return res.json({
-                reply: "Հիշողությունս թարմացրի։ ❤️"
-            });
-        }
-
-        // ======================================
-        // EXPLICIT MEMORY COMMANDS
-        // ======================================
-
-        if (rememberProfile(userMessage) || rememberFact(userMessage)) {
-            return res.json({
-                reply: "Հիշեցի և պահպանեցի հիշողությանս մեջ։ ❤️"
-            });
-        }
-
-        // ======================================
-        // CONFIRM PENDING MEMORY
-        // ======================================
-
-        const confirmation = handleMemoryConfirmation(userMessage);
+        const confirmation =
+            handleMemoryConfirmation(userMessage);
 
         if (confirmation === "saved") {
             return res.json({
                 reply: "Լավ, պահպանեցի այս տեղեկությունը հիշողությանս մեջ։ ❤️"
+            });
+        }
+
+        if (confirmation === "exists") {
+            return res.json({
+                reply: "Այս տեղեկությունն արդեն հիշում եմ։ ❤️"
             });
         }
 
@@ -1471,476 +2352,221 @@ app.post("/api/chat", async (req, res) => {
             });
         }
 
-        // ======================================
-        // AUTOMATIC MEMORY
-        // ======================================
+        /* ======================================
+           2. FORGET COMMANDS
+        ====================================== */
 
-        const automaticMemory = saveAutomaticMemory(userMessage);
+  
+/* ======================================
+   2. FORGET COMMANDS
+====================================== */
 
-        if (automaticMemory === "saved") {
+const forgetResult = await forgetFact(userMessage);
+
+if (forgetResult === true) {
+    return res.json({
+        reply: "Հաջողությամբ մոռացա և ջնջեցի այդ տեղեկությունը։ ❤️"
+    });
+}
+
+if (forgetResult === "all") {
+    return res.json({
+        reply: "Հիշողությանս ամբողջ տեղեկությունը ջնջեցի։ ❤️"
+    });
+}
+
+if (forgetResult === "not_found") {
+    return res.json({
+        reply: "Այդ տեղեկությունը հիշողությանս մեջ չգտա։"
+    });
+}
+
+if (forgetResult === "error") {
+    return res.json({
+        reply: "Չհաջողվեց ջնջել տեղեկությունը։"
+    });
+}
+
+        /* ======================================
+           3. FUTURE PREFERENCE
+        ====================================== */
+
+        if (updateFuturePreference(userMessage)) {
             return res.json({
-                reply: "Հասկացա և ավտոմատ պահպանեցի այս տեղեկությունը հիշողությանս մեջ։ ❤️"
+                reply: "Հիշողությունս հաջողությամբ թարմացրի։ ❤️"
             });
         }
 
-        if (automaticMemory === "exists") {
+        /* ======================================
+           4. EXPLICIT REMEMBER COMMAND
+        ====================================== */
+const normalizedUserMessage =
+    armenianTransliterate(userMessage);
+
+if (hasRememberCommand(normalizedUserMessage)) {
+    const cleanMessage =
+        cleanRememberCommand(userMessage);
+
+            const detected =
+                await analyzeMemoryWithGemini(cleanMessage);
+
+            if (detected) {
+                if (detected.confidence >= 0.90) {
+                    const currentMemory = loadMemory();
+
+                    const result = saveDetectedMemory(
+                        currentMemory,
+                        detected
+                    );
+
+                    if (
+                        result === "saved" ||
+                        result === true
+                    ) {
+                        return res.json({
+                            reply: saveMemory(currentMemory)
+                                ? "Հիշեցի և պահպանեցի հիշողությանս մեջ։ ❤️"
+                                : "Չհաջողվեց պահպանել տեղեկությունը։"
+                        });
+                    }
+
+                    if (result === "exists") {
+                        return res.json({
+                            reply: "Այս տեղեկությունն արդեն հիշում եմ։ ❤️"
+                        });
+                    }
+                }
+
+                if (setPendingMemory(detected)) {
+                    return res.json({
+                        reply: `Ցանկանո՞ւմ ես, որ հիշեմ՝ ${detected.value}։ ❤️`
+                    });
+                }
+            }
+
             return res.json({
-                reply: "Այս տեղեկությունն արդեն հիշում եմ։ ❤️"
+                reply: "Չկարողացա հստակ հասկանալ՝ ինչ տեղեկություն պահպանեմ։"
             });
         }
 
-        // ======================================
-        // ASK FOR MEMORY CONFIRMATION
-        // ======================================
-
-        if (askMemoryConfirmation(userMessage)) {
-            return res.json({
-                reply: "Սա քո մասին նոր տեղեկությո՞ւն է։ Պահպանե՞մ հիշողությանս մեջ։ ❤️"
-            });
-        }
-
-        // ======================================
-        // MEMORY QUESTIONS
-        // ======================================
+        /* ======================================
+           5. MEMORY QUESTIONS
+        ====================================== */
 
         memory = loadMemory();
 
-        if (isMemoryQuestion(userMessage)) {
-            return res.json({
-                reply: getMemorySummary(memory)
-            });
-        }
+console.log("ZENIX MEMORY GAMES:", memory.games);
+console.log("ZENIX USER QUESTION:", userMessage);
 
-        const memoryAnswer = getMemoryAnswer(
-            memory,
-            "Armenian",
-            userMessage
-        );
+const memoryAnswer = getMemoryAnswer(
+    memory,
+    "Armenian",
+    userMessage
+);
 
-        if (memoryAnswer) {
-            return res.json({
-                reply: memoryAnswer
-            });
-        }
+console.log("ZENIX MEMORY ANSWER:", memoryAnswer);
 
-        // ======================================
-        // GEMINI CHAT
-        // ======================================
-
-        const contents = history
-            .filter(item =>
-                item &&
-                ["user", "model"].includes(item.role) &&
-                typeof item.text === "string"
-            )
-            .slice(-20)
-            .map(item => ({
-                role: item.role,
-                parts: [{ text: item.text }]
-            }));
-
-        const systemPrompt = `
-Դու ZENIX-ն ես՝ հայկական AI օգնական։
-
-Պատասխանիր բնական, բարեկամական հայերենով։
-Հիշիր խոսակցության համատեքստը։
-Մի հորինիր օգտատիրոջ մասին տեղեկություններ։
-
-Օգտատիրոջ անունը՝ ${memory.user_name || "անհայտ"}։
-
-Պահպանված փաստեր՝
-${memory.facts.join("\n")}
-
-Նախասիրություններ՝
-${memory.preferences.join("\n")}
-
-Հետաքրքրություններ՝
-${(memory.interests || []).join("\n")}
-
-Սարքեր՝
-${(memory.devices || []).join("\n")}
-
-Հիշողության մեջ եղած տեղեկությունները օգտագործիր պատասխանելիս։
-Մի հորինիր բացակայող տեղեկություններ։
-Մի ասա, որ տեղեկություն ես պահպանել, եթե այն իրականում չի պահպանվել։
-`;
-
-        const response = await fetch(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=" +
-            encodeURIComponent(apiKey),
-            {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                    systemInstruction: {
-                        parts: [{ text: systemPrompt }]
-                    },
-                    contents,
-                    generationConfig: {
-                        temperature: 0.7,
-                        maxOutputTokens: 2048
-                    }
-                })
-            }
-        );
-
-       const responseText = await response.text();
-
-let data;
-
-try {
-    data = JSON.parse(responseText);
-} catch (error) {
-    console.error("GEMINI NON-JSON RESPONSE:", responseText);
-
-    return res.status(502).json({
-        error: "Gemini returned HTML or invalid JSON."
+if (memoryAnswer) {
+    return res.json({
+        reply: memoryAnswer
     });
 }
 
-       if (!response.ok) {
-    console.error("GEMINI ERROR:", data);
+        /* ======================================
+           6. AUTOMATIC MEMORY  
+         ======================================*/
 
-    return res.status(502).json({
-        error: data.error?.message || "Gemini API error",
-        status: response.status
+        console.log("MEMORY TEST MESSAGE:", userMessage);
+
+const automaticMemory =
+    await saveAutomaticMemory(userMessage);
+
+console.log(
+    "MEMORY TEST RESULT:",
+    automaticMemory
+);
+
+if (automaticMemory === "saved") {
+    return res.json({
+        reply: "Հասկացա և պահպանեցի հիշողությանս մեջ։ ❤️"
     });
 }
 
-        const reply = data.candidates?.[0]?.content?.parts
-            ?.map(part => part.text || "")
-            .join("")
-            .trim();
+if (automaticMemory === "exists") {
+    return res.json({
+        reply: "Այս տեղեկությունն արդեն հիշում եմ։ ❤️"
+    });
+}
 
-        if (!reply) {
-            return res.status(500).json({
-                error: "Gemini returned an empty response."
-            });
-        }
+if (
+    automaticMemory &&
+    automaticMemory.status === "confirmation"
+) {
+    const detected = automaticMemory.detected;
 
-        res.json({ reply });
+    if (setPendingMemory(detected)) {
+        return res.json({
+            reply: `Ցանկանո՞ւմ ես, որ հիշեմ՝ ${detected.value}։ ❤️`
+        });
+    }
+}
+
+if (automaticMemory === false) {
+    console.log("MEMORY NOT SAVED");
+}
+        /* ======================================
+           7. GEMINI CHAT
+        ====================================== */
+
+        memory = loadMemory();
+
+        const answer = await askGemini(
+            history,
+            memory
+        );
+
+        return res.json({
+            reply: answer
+        });
 
     } catch (error) {
         console.error("ZENIX CHAT ERROR:", error);
 
-        res.status(500).json({
+        return res.status(500).json({
             error: error.message || "Internal server error"
         });
     }
 });
 
-
-
-    // ==========================================
-    // GOOGLE NEWS SEARCH
-    // ==========================================
-
-    async function searchGoogleNews(query) {
-        try {
-            const originalQuery = String(query || "")
-                .normalize("NFC")
-                .trim();
-
-            const isGTA6Query =
-                /\bGTA\s*[- ]?\s*6\b|Grand Theft Auto\s*(?:VI|6)\b/i
-                    .test(originalQuery);
-
-            let searchQuery = originalQuery;
-
-            if (isGTA6Query) {
-                searchQuery = "GTA 6";
-            }
-
-            if (!searchQuery) return [];
-
-            const params = new URLSearchParams({
-                q: isGTA6Query ? '"GTA 6"' : searchQuery,
-                hl: "en-US",
-                gl: "US",
-                ceid: "US:en"
-            });
-
-            const url =
-                "https://news.google.com/rss/search?" +
-                params.toString();
-
-            console.log("ZENIX RSS SEARCH QUERY:", searchQuery);
-
-            const response = await fetch(url, {
-                headers: {
-                    "User-Agent": "Mozilla/5.0 ZENIX/1.0",
-                    "Accept": "application/rss+xml, application/xml, text/xml"
-                },
-                signal: AbortSignal.timeout(15000)
-            });
-
-            console.log("ZENIX RSS STATUS:", response.status);
-
-            if (!response.ok) {
-                throw new Error("News search failed: " + response.status);
-            }
-
-            const xml = await response.text();
-
-            function decodeXML(value) {
-                return String(value || "")
-                    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
-                    .replace(/&amp;/g, "&")
-                    .replace(/&quot;/g, '"')
-                    .replace(/&#39;|&apos;/g, "'")
-                    .replace(/&lt;/g, "<")
-                    .replace(/&gt;/g, ">")
-                    .replace(/&#(\d+);/g, (_, code) =>
-                        String.fromCodePoint(Number(code))
-                    )
-                    .replace(/&#x([0-9a-f]+);/gi, (_, code) =>
-                        String.fromCodePoint(parseInt(code, 16))
-                    )
-                    .trim();
-            }
-
-            function getValue(item, tag) {
-                const regex = new RegExp(
-                    `<${tag}\\b[^>]*>([\\s\\S]*?)<\\/${tag}>`,
-                    "i"
-                );
-
-                const match = item.match(regex);
-
-                return match ? decodeXML(match[1]) : "";
-            }
-
-            function getSourceUrl(item) {
-                const match = item.match(
-                    /<source\b[^>]*\burl=["']([^"']+)["']/i
-                );
-
-                return match ? decodeXML(match[1]) : "";
-            }
-
-            const items = xml.match(
-                /<item\b[^>]*>[\s\S]*?<\/item>/gi
-            ) || [];
-
-            const gta6Pattern =
-                /\bGTA\s*[- ]?\s*6\b|\bGrand Theft Auto\s*(?:VI|6)\b/i;
-
-            let results = items.map(item => ({
-                title: getValue(item, "title"),
-                link: getValue(item, "link"),
-                date: getValue(item, "pubDate"),
-                source: getValue(item, "source"),
-                sourceUrl: getSourceUrl(item)
-            }));
-
-            results = results.filter(item => {
-                if (!item.title || !item.link) return false;
-
-                if (isGTA6Query) {
-                    const match = item.title.match(gta6Pattern);
-
-                    if (!match || match.index > 35) return false;
-
-                    const excludedTopics = [
-                        /air force 1/i,
-                        /10 things that have happened in f1/i,
-                        /before we got gta 6/i
-                    ];
-
-                    if (
-                        excludedTopics.some(pattern =>
-                            pattern.test(item.title)
-                        )
-                    ) {
-                        return false;
-                    }
-                }
-
-                return true;
-            });
-
-            const uniqueResults = [
-                ...new Map(
-                    results.map(item => [item.link, item])
-                ).values()
-            ];
-
-            uniqueResults.sort((a, b) => {
-                const dateA = Date.parse(a.date) || 0;
-                const dateB = Date.parse(b.date) || 0;
-
-                return dateB - dateA;
-            });
-
-            const finalResults = uniqueResults.slice(0, 10);
-
-            console.log("ZENIX RSS RAW RESULTS:", items.length);
-            console.log("ZENIX RSS FILTERED RESULTS:", finalResults.length);
-
-            return finalResults;
-
-        } catch (error) {
-            console.error("ZENIX NEWS SEARCH ERROR:", error.message);
-            return [];
-        }
-    }
-
-    // ==========================================
-    // NEWS VERIFICATION HELPERS
-    // ==========================================
-
-    function getNewsPublicationDate(date) {
-        if (!date) return "Ամսաթիվը նշված չէ";
-
-        const parsedDate = new Date(date);
-
-        if (isNaN(parsedDate.getTime())) {
-            return "Ամսաթիվը հնարավոր չէ ստուգել";
-        }
-
-        return parsedDate.toISOString();
-    }
-
-    function getNewsSourceStatus(item) {
-        const officialDomains = [
-            "rockstargames.com",
-            "take2games.com"
-        ];
-
-        try {
-            const hostname = new URL(item.sourceUrl).hostname
-                .toLowerCase()
-                .replace(/^www\./, "");
-
-            if (officialDomains.some(domain =>
-                hostname === domain ||
-                hostname.endsWith("." + domain)
-            )) {
-                return "OFFICIAL SOURCE DOMAIN - ARTICLE CONTENT NOT VERIFIED";
-            }
-
-        } catch {}
-
-        return "MEDIA REPORT - NOT OFFICIALLY VERIFIED";
-    }
-
-    // ==========================================
-    // BUILD NEWS CONTEXT
-    // ==========================================
-
-    function buildNewsContext(newsResults) {
-        if (!newsResults.length) {
-            return `
-    GOOGLE NEWS SEARCH:
-
-    Google News-ը արդյունքներ չի վերադարձրել։
-
-    Մի հորինիր նորություններ։
-    Մի պնդիր, որ որևէ տեղեկություն ստուգվել է։
-    Հստակ ասա օգտատիրոջը, որ որոնումը արդյունք չի տվել։
-    `;
-        }
-
-        const articles = newsResults.map((item, index) => {
-            return [
-                `${index + 1}. TITLE: ${item.title}`,
-                `LINK: ${item.link}`,
-                `PUBLICATION DATE: ${getNewsPublicationDate(item.date)}`,
-                `SOURCE: ${item.source || "Unknown"}`,
-                `SOURCE URL: ${item.sourceUrl || "Unknown"}`,
-                `SOURCE STATUS: ${getNewsSourceStatus(item)}`,
-                "ARTICLE CONTENT: NOT PROVIDED - DO NOT ASSUME ITS CONTENT"
-            ].join("\n");
-        }).join("\n\n");
-
-        return `
-    GOOGLE NEWS SEARCH RESULTS:
-
-    ${articles}
-
-    STRICT NEWS VERIFICATION RULES:
-
-    1. A headline is not proof of the claim it makes.
-
-    2. Do not invent article content, quotes, announcements,
-    dates, statements or additional details.
-
-    3. An official source domain is not enough to prove
-    that the headline's claim is true.
-    The article's actual content must support the claim.
-
-    4. Distinguish these categories:
-
-    OFFICIAL:
-    The relevant claim is explicitly supported by
-    an official company or organization source.
-
-    REPORTED:
-    A news outlet has reported the claim,
-    but official confirmation has not been established.
-
-    UNCONFIRMED:
-    The claim is based on rumors, speculation
-    or insufficient evidence.
-
-    5. If only the headline and link are available,
-    say that the article content has not been checked.
-
-    6. Never say Rockstar officially confirmed something
-    unless an actual official source supports that claim.
-
-    7. Never treat Google News search results
-    as automatic proof of a claim.
-
-    8. Always show the publication date.
-    If the date is missing, say so.
-
-    9. Never present an old article as today's news.
-
-    10. If publication dates are old,
-    clearly identify them as older reports.
-
-    11. If different sources disagree,
-    explain the disagreement.
-
-    12. Include the article link when discussing it.
-
-    13. Never create fake links or fake sources.
-
-    14. If there is insufficient evidence,
-    say clearly that the information cannot be verified.
-
-    15. Accuracy is more important than giving
-    a confident or complete-sounding answer.
-    `;
-    }
-
-    // ==========================================
-    // ZENIX AI CHAT API
-    // ==========================================
-
-    // ZENIX NAME USAGE CONTROL
-    const nameUsage = new Map();
-
-    function canUseUserName(sessionId) {
-        const now = Date.now();
-        const lastUsed = nameUsage.get(sessionId);
-
-        // Առնվազն 3 պատասխան պետք է անցնի
-        if (lastUsed && now - lastUsed < 60000) {
-            return false;
-        }
-
-        nameUsage.set(sessionId, now);
-        return true;
-    }
-
-    // ==========================================
-    // START SERVER
-    // ==========================================
-
-    app.listen(PORT, () => {
-        console.log(`ZENIX server running at http://localhost:${PORT}`);
+/* =====================================================
+   MEMORY STATUS
+===================================================== */
+
+app.get("/api/memory", (req, res) => {
+    const memory = loadMemory();
+
+    return res.json({
+        summary: getMemorySummary(memory),
+        memory
     });
+});
+
+/* =====================================================
+   START SERVER
+===================================================== */
+
+app.listen(PORT, () => {
+    console.log(
+        `ZENIX server running at http://localhost:${PORT}`
+    );
+
+    console.log(
+        "ZENIX MEMORY DIRECTORY:",
+        MEMORY_DIR
+    );
+
+    console.log(
+        "ZENIX GEMINI MODEL:",
+        GEMINI_MODEL
+    );
+});
