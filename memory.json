@@ -1,0 +1,49 @@
+{
+    "facts": [
+        "Ապրում եմ Հայաստանում"
+    ],
+    "preferences": [
+        "միրգ: բանան",
+        "մեքենա: BMW",
+        "սպորտ: բռնցքամարտ",
+        "կենդանի: կատու"
+    ],
+    "interests": [
+        "ZENIX ռոբոտի ստեղծում"
+    ],
+    "devices": [
+        "Samsung Galaxy A54"
+    ],
+    "goals": [
+        "Ստեղծել ZENIX ռոբոտի առաջին ֆիզիկական նախատիպը"
+    ],
+    "projects": [
+        "ZENIX ռոբոտի ստեղծում",
+        "ZENIX-ի ծրագրավորում",
+        "ZENIX-ի հիշողության համակարգի ծրագրավորում"
+    ],
+    "games": [
+        "Minecraft",
+        "Counter Strike 2",
+        "Forza Horizon 6",
+        "Euro Truck Simulator 2",
+        "Need for Speed Heat",
+        "Grand Theft Auto VI",
+        "Grand Theft Auto V",
+        "EVOLVE RP",
+        "Car Mechanic Simulator",
+        "Red Dead Redemption 2"
+    ],
+    "tasks": [
+        "Շարունակել ZENIX-ի ծրագրավորումն ու զարգացումը"
+    ],
+    "user_name": "KAREN",
+    "youtube_channel": "",
+    "pending_memory": {
+        "type": "game",
+        "category": null,
+        "value": "Forza Horizon 7",
+        "confidence": 0.85,
+        "createdAt": 1794816264898
+    }
+}
