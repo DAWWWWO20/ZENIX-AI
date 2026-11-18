@@ -1472,17 +1472,25 @@ function normalizePreferenceCategory(value) {
         "միրգ": "միրգ",
         "միրգյ": "միրգ",
         "մրգ": "միրգ",
+
         "սպորտ": "սպորտ",
         "սպորտաձև": "սպորտ",
         "սպորտաձեվ": "սպորտ",
+
         "կենդանի": "կենդանի",
         "կենդանին": "կենդանի",
+
         "մեքենա": "մեքենա",
+        "մեքենայի ապրանքանիշ": "մեքենա",
+        "ավտոմեքենա": "մեքենա",
+        "ավտոմեքենայի ապրանքանիշ": "մեքենա",
+
         "գույն": "գույն"
     };
 
     return aliases[category] || category;
 }
+
 
 function getSavedPreferenceCategory(item) {
     const text = String(item || "").trim();
@@ -1498,7 +1506,7 @@ function getSavedPreferenceCategory(item) {
 
     // Հին ձևաչափ
     const match = text.match(
-        /^(?:իմ\s+)?սիրելի\s+(միրգյ?|սպորտաձև|սպորտ|կենդանի|կենդանին|մեքենա|գույն)\s*(?:՝|:|-)?\s*(.+?)\s+է$/iu
+        /^(?:իմ\s+)?սիրելի\s+(մեքենայի\s+ապրանքանիշ|ավտոմեքենայի\s+ապրանքանիշ|ավտոմեքենա|միրգյ?|սպորտաձև|սպորտաձեվ|սպորտ|կենդանի|կենդանին|մեքենա|գույն)\s*(?:՝|:|-)?\s*(.+?)\s+է$/iu
     );
 
     if (match) {
@@ -1507,6 +1515,7 @@ function getSavedPreferenceCategory(item) {
 
     return "";
 }
+
 
 
 function getSavedPreferenceValue(item) {
@@ -2455,6 +2464,7 @@ function updateFuturePreference(message) {
 ===================================================== */
 
 
+
 function getMemorySummary(memory) {
     const lines = [];
 
@@ -2470,6 +2480,46 @@ function getMemorySummary(memory) {
         lines.push(`YouTube ալիք՝ ${memory.youtube_channel}`);
     }
 
+    // Նախասիրությունների կրկնությունների մաքրում
+    const preferences = Array.isArray(memory.preferences)
+        ? memory.preferences.filter(
+            item => typeof item === "string" && item.trim()
+        )
+        : [];
+
+    const uniquePreferences = new Map();
+
+    for (const item of preferences) {
+        const category = getSavedPreferenceCategory(item);
+
+        if (!category) {
+            uniquePreferences.set(
+                `unknown:${item}`,
+                item
+            );
+            continue;
+        }
+
+        const oldItem = uniquePreferences.get(category);
+
+        const oldCategory = oldItem
+            ? normalizeText(oldItem.split(":")[0]).trim()
+            : "";
+
+        const newCategory = normalizeText(
+            item.split(":")[0]
+        ).trim();
+
+        // Հիմնական կատեգորիան նախընտրում ենք
+        if (
+            !oldItem ||
+            oldCategory !== category ||
+            newCategory === category
+        ) {
+            uniquePreferences.set(category, item);
+        }
+    }
+
     const sections = [
         ["preferences", "Նախասիրություններ"],
         ["interests", "Հետաքրքրություններ"],
@@ -2482,11 +2532,19 @@ function getMemorySummary(memory) {
     ];
 
     for (const [key, title] of sections) {
-        const items = Array.isArray(memory[key])
-            ? memory[key].filter(
-                item => typeof item === "string" && item.trim()
-            )
-            : [];
+        let items;
+
+        if (key === "preferences") {
+            items = [...uniquePreferences.values()];
+        } else {
+            items = Array.isArray(memory[key])
+                ? memory[key].filter(
+                    item =>
+                        typeof item === "string" &&
+                        item.trim()
+                )
+                : [];
+        }
 
         if (items.length) {
             lines.push(
@@ -2506,9 +2564,10 @@ function getMemorySummary(memory) {
 ===================================================== */
 
 
-function getMemoryAnswer(memory, language, question = "") {
-    const text = normalizeText(question);
 
+function getMemoryAnswer(memory, language, question = "") {
+const text = normalizeText(question)
+    .replace(/[՞?։!,.՝]/g, "");
     memory = memory && typeof memory === "object"
         ? memory
         : {};
@@ -2517,7 +2576,7 @@ function getMemoryAnswer(memory, language, question = "") {
     console.log("NORMALIZED QUESTION:", text);
 
     const hasAny = (...words) =>
-        words.some(word => text.includes(word));
+        words.some(word => text.includes(normalizeText(word)));
 
     const categories = [
         {
@@ -2562,8 +2621,7 @@ function getMemoryAnswer(memory, language, question = "") {
         }
     ];
 
-  const questionAboutMemory =
-    hasAny(
+    const questionAboutMemory = hasAny(
         "ինչ",
         "ինչ՞",
         "ի՞նչ",
@@ -2572,77 +2630,116 @@ function getMemoryAnswer(memory, language, question = "") {
         "հիշում",
         "պահպանված"
     );
+
     if (!questionAboutMemory) {
         return null;
     }
 
+    // Ամբողջ հիշողության ամփոփում
+    if (
+        hasAny("հիշում", "հիշող", "պահպանված") &&
+        hasAny("իմ մասին", "տեղեկություն", "հիշողություն")
+    ) {
+        return getMemorySummary(memory);
+    }
+
+    const answers = [];
+
     // Անուն
     if (hasAny("անուն", "ով եմ")) {
-        return memory.user_name
-            ? `Քո անունը ${memory.user_name} է։ ❤️`
-            : "Քո անունը դեռ չեմ հիշում։";
+        answers.push(
+            memory.user_name
+                ? `Քո անունը ${memory.user_name} է։ ❤️`
+                : "Քո անունը դեռ չեմ հիշում։"
+        );
     }
 
     // YouTube ալիք
     if (hasAny("youtube", "յություբ")) {
-        return memory.youtube_channel
-            ? `Քո YouTube ալիքն է՝ ${memory.youtube_channel}։ ❤️`
-            : "YouTube ալիք դեռ չեմ հիշում։";
+        answers.push(
+            memory.youtube_channel
+                ? `Քո YouTube ալիքն է՝ ${memory.youtube_channel}։ ❤️`
+                : "YouTube ալիք դեռ չեմ հիշում։"
+        );
     }
 
-    // Առանձին հիշողության բաժին
-   // Անհատական նախասիրությունների պատասխաններ
-const preferenceQuestions = [
-    {
-        key: "մեքենա",
-        words: ["մեքենա", "ավտոմեքենա"]
-    },
-    {
-        key: "միրգ",
-        words: ["միրգ", "մրգ"]
-    },
-    {
-        key: "սպորտ",
-        words: ["սպորտ", "բոքս", "բռնցքամարտ"]
-    },
-   {
-    key: "կենդանի",
-    words: ["կենդանի", "կենդանին", "ընտանի կենդանի"]
-},
-    {
-        key: "գույն",
-        words: ["գույն"]
-    }
-];
+    // Անհատական նախասիրություններ
+    const preferenceQuestions = [
+        {
+            key: "մեքենա",
+            words: ["մեքենա", "ավտոմեքենա"]
+        },
+        {
+            key: "միրգ",
+            words: ["միրգ", "մրգ"]
+        },
+        {
+            key: "սպորտ",
+            words: ["սպորտ", "բոքս", "բռնցքամարտ"]
+        },
+        {
+            key: "կենդանի",
+            words: ["կենդանի", "կենդանին", "ընտանի կենդանի"]
+        },
+        {
+            key: "գույն",
+            words: ["գույն"]
+        }
+    ];
 
-const preferenceQuestion = preferenceQuestions.find(item =>
-    hasAny(...item.words)
-);
-
-if (preferenceQuestion) {
-    const saved = Array.isArray(memory.preferences)
-        ? memory.preferences.find(item =>
-            normalizeText(item).startsWith(
-                normalizeText(preferenceQuestion.key) + ":"
-            )
-        )
-        : null;
-
-    if (saved) {
-        const value = saved.substring(saved.indexOf(":") + 1).trim();
-
-        return `Քո սիրելի ${preferenceQuestion.key}ը ${value} է։ ❤️`;
-    }
-}
-
-    const category = categories.find(item =>
+    const matchedPreferences = preferenceQuestions.filter(item =>
         hasAny(...item.words)
     );
 
-    if (category) {
+    for (const preferenceQuestion of matchedPreferences) {
+        const saved = Array.isArray(memory.preferences)
+            ? memory.preferences.find(item =>
+                typeof item === "string" &&
+                normalizeText(item).startsWith(
+                    normalizeText(preferenceQuestion.key) + ":"
+                )
+            )
+            : null;
+
+        if (saved) {
+            const value = saved
+                .substring(saved.indexOf(":") + 1)
+                .trim();
+
+            answers.push(
+                `Քո սիրելի ${preferenceQuestion.key}ը ${value} է։ ❤️`
+            );
+        } else {
+            answers.push(
+                `Քո սիրելի ${preferenceQuestion.key}ը դեռ չեմ հիշում։`
+            );
+        }
+    }
+
+    // Հիշողության բաժիններ
+    const matchedCategories = categories.filter(item => {
+        if (!hasAny(...item.words)) {
+            return false;
+        }
+
+        // Եթե կոնկրետ նախասիրություն է հարցվել,
+        // ընդհանուր նախասիրությունների բաժինը չենք կրկնում։
+        if (
+            item.key === "preferences" &&
+            matchedPreferences.length > 0
+        ) {
+            return false;
+        }
+
+        return true;
+    });
+
+    for (const category of matchedCategories) {
         const items = Array.isArray(memory[category.key])
             ? memory[category.key].filter(
-                item => typeof item === "string" && item.trim()
+                item =>
+                    typeof item === "string" &&
+                    item.trim()
             )
             : [];
 
@@ -2654,28 +2751,28 @@ if (preferenceQuestion) {
         );
 
         if (items.length === 0) {
-            return `Առայժմ պահպանված ${category.title.toLowerCase()} չեմ հիշում։`;
+            answers.push(
+                `Առայժմ պահպանված ${category.title.toLowerCase()} չեմ հիշում։`
+            );
+            continue;
         }
 
-        return `Ահա քո մասին հիշած ${category.title.toLowerCase()}ը։ ❤️
-
-${items.map((item, index) =>
-            `${index + 1}. ${item}`
-             ).join("\n")}`;
-
+        answers.push(
+            `Ահա քո մասին հիշած ${category.title.toLowerCase()}ը։ ❤️\n\n` +
+            items.map((item, index) =>
+                `${index + 1}. ${item}`
+            ).join("\n")
+        );
     }
-    
 
-    // Ամբողջ հիշողության ամփոփում
-    if (
-        hasAny("հիշում", "հիշող", "պահպանված") &&
-        hasAny("իմ մասին", "տեղեկություն", "հիշողություն")
-    ) {
-        return getMemorySummary(memory);
+    // Եթե գտնվել են մի քանի պատասխաններ, վերադարձնում ենք բոլորը։
+    if (answers.length > 0) {
+        return answers.join("\n\n");
     }
 
     return null;
 }
+
 
 
 /* =====================================================
@@ -2915,17 +3012,29 @@ async function askGemini(history, memory) {
         throw new Error("GEMINI_API_KEY is missing in .env");
     }
 
-    const contents = history
-        .filter(item =>
-            item &&
-            ["user", "model"].includes(item.role) &&
-            typeof item.text === "string"
-        )
-        .slice(-20)
-        .map(item => ({
-            role: item.role,
-            parts: [{ text: item.text }]
-        }));
+const contents = history
+    .filter(item =>
+        item &&
+        ["user", "assistant", "model"].includes(item.role) &&
+        typeof item.text === "string" &&
+        item.text.trim()
+    )
+    .slice(-20)
+    .map(item => ({
+        role: item.role === "assistant"
+            ? "model"
+            : item.role,
+        parts: [{ text: item.text }]
+    }));
+
+// Gemini-ի պատմությունը պետք է սկսվի user հաղորդագրությամբ։
+while (contents.length && contents[0].role !== "user") {
+    contents.shift();
+}
+
+if (!contents.length) {
+    throw new Error("Gemini conversation history is empty.");
+}
 
     const systemPrompt = `
 Դու ZENIX-ն ես՝ հայկական AI օգնական։
@@ -3182,7 +3291,12 @@ if (hasRememberCommand(normalizedUserMessage)) {
 
 console.log("ZENIX MEMORY GAMES:", memory.games);
 console.log("ZENIX USER QUESTION:", userMessage);
-
+console.log(
+    "USER MEMORY BEFORE ANSWER:",
+    JSON.stringify(memory, null, 2)
+);
+console.log("USER MEMORY BEFORE ANSWER:", memory);
+console.log("USER PREFERENCES:", memory?.preferences);
 const memoryAnswer = getMemoryAnswer(
     memory,
     "Armenian",
