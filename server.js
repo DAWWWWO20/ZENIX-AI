@@ -6,9 +6,12 @@
 
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
+const { AsyncLocalStorage } = require("async_hooks");
+
+const memoryStorage = new AsyncLocalStorage();
 const express = require("express");
 const dotenv = require("dotenv");
-
 dotenv.config({ override: true });
 
 const app = express();
@@ -18,9 +21,42 @@ const MEMORY_DIR = path.resolve(
     process.env.MEMORY_DIR || __dirname
 );
 
-const MEMORY_FILE = path.join(MEMORY_DIR, "memory.json");
-const MEMORY_TEMP_FILE = MEMORY_FILE + ".tmp";
-const MEMORY_BACKUP_FILE = MEMORY_FILE + ".backup";
+const DEFAULT_MEMORY_FILE = path.join(MEMORY_DIR, "memory.json");
+
+
+function getMemoryPaths() {
+    const store = memoryStorage.getStore();
+    const userId = store?.userId;
+
+    // Հիշողության գործողություններն առանց
+    // օգտատիրոջ կոնտեքստի արգելված են։
+    if (
+        typeof userId !== "string" ||
+        !/^USER_\d{3,}$/.test(userId)
+    ) {
+        throw new Error(
+            "USER_MEMORY_CONTEXT_REQUIRED"
+        );
+    }
+
+    const directory = path.join(
+        USERS_DIR,
+        userId
+    );
+
+    const file = path.join(
+        directory,
+        "memory.json"
+    );
+
+    return {
+        directory,
+        file,
+        temp: file + ".tmp",
+        backup: file + ".backup"
+    };
+}
+
 
 const GEMINI_MODEL =
     process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
@@ -55,20 +91,660 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: "15mb" }));
 
-// Պաշտպանում ենք հիշողության ֆայլերը հանրային հասանելիությունից։
+/* =====================================================
+   ZENIX AUTHENTICATION
+===================================================== */
+
+const AUTH_SECRET = process.env.ZENIX_AUTH_SECRET;
+
+if (!AUTH_SECRET || AUTH_SECRET.length < 32) {
+    throw new Error("ZENIX_AUTH_SECRET is missing or too short");
+}
+
+const AUTH_TOKEN_LIFETIME = 7 * 24 * 60 * 60 * 1000;
+
+const USERS_DIR = path.join(MEMORY_DIR, "users");
+const USERS_FILE = path.join(MEMORY_DIR, "users.json");
+function initializeMemoryStorage() {
+    fs.mkdirSync(MEMORY_DIR, {
+        recursive: true
+    });
+
+    const oldUsersFile = path.join(
+        __dirname,
+        "users.json"
+    );
+
+    const oldUsersDirectory = path.join(
+        __dirname,
+        "users"
+    );
+
+    // Հին users.json-ի տեղափոխում՝ եթե նորում չկա
+    if (
+        path.resolve(oldUsersFile) !==
+            path.resolve(USERS_FILE) &&
+        fs.existsSync(oldUsersFile) &&
+        !fs.existsSync(USERS_FILE)
+    ) {
+        fs.copyFileSync(
+            oldUsersFile,
+            USERS_FILE
+        );
+
+        console.log("ZENIX USERS DATABASE MIGRATED!");
+    }
+
+    // Հին օգտատերերի պանակների տեղափոխում
+    if (
+        path.resolve(oldUsersDirectory) !==
+            path.resolve(USERS_DIR) &&
+        fs.existsSync(oldUsersDirectory)
+    ) {
+        fs.mkdirSync(USERS_DIR, {
+            recursive: true
+        });
+
+        const entries = fs.readdirSync(
+            oldUsersDirectory,
+            { withFileTypes: true }
+        );
+
+        for (const entry of entries) {
+            if (!entry.isDirectory()) continue;
+
+            const oldPath = path.join(
+                oldUsersDirectory,
+                entry.name
+            );
+
+            const newPath = path.join(
+                USERS_DIR,
+                entry.name
+            );
+
+            // Գոյություն ունեցող նոր տվյալները չենք վերագրում
+            if (!fs.existsSync(newPath)) {
+                fs.cpSync(oldPath, newPath, {
+                    recursive: true
+                });
+
+                console.log(
+                    "ZENIX USER DATA MIGRATED:",
+                    entry.name
+                );
+            }
+        }
+    }
+
+    console.log(
+        "ZENIX PERSISTENT STORAGE:",
+        MEMORY_DIR
+    );
+}
+initializeMemoryStorage();
+fs.mkdirSync(MEMORY_DIR, {
+    recursive: true
+});
+function loadUsers() {
+    try {
+        if (!fs.existsSync(USERS_FILE)) {
+            fs.writeFileSync(
+                USERS_FILE,
+                "[]",
+                "utf8"
+            );
+        }
+
+        const users = JSON.parse(
+            fs.readFileSync(USERS_FILE, "utf8")
+        );
+
+        return Array.isArray(users) ? users : [];
+
+    } catch (error) {
+        console.error("USERS LOAD ERROR:", error.message);
+        throw new Error("USERS_DATABASE_ERROR");
+    }
+}
+
+function saveUsers(users) {
+    const tempFile = USERS_FILE + ".tmp";
+
+    try {
+        fs.writeFileSync(
+            tempFile,
+            JSON.stringify(users, null, 4),
+            "utf8"
+        );
+
+        JSON.parse(fs.readFileSync(tempFile, "utf8"));
+
+        fs.renameSync(tempFile, USERS_FILE);
+
+        return true;
+
+    } catch (error) {
+        console.error("USERS SAVE ERROR:", error.message);
+        return false;
+
+    } finally {
+        try {
+            if (fs.existsSync(tempFile)) {
+                fs.unlinkSync(tempFile);
+            }
+        } catch {}
+    }
+}
+
+
+function hashPassword(password) {
+    const salt = crypto.randomBytes(16).toString("hex");
+
+    const hash = crypto.scryptSync(
+        password,
+        salt,
+        64
+    ).toString("hex");
+
+    return {
+        passwordSalt: salt,
+        passwordHash: hash
+    };
+}
+
+function verifyPassword(password, user) {
+    try {
+        if (
+            typeof password !== "string" ||
+            !user?.passwordSalt ||
+            !user?.passwordHash
+        ) {
+            return false;
+        }
+
+        const hash = crypto.scryptSync(
+            password,
+            user.passwordSalt,
+            64
+        );
+
+        const storedHash = Buffer.from(
+            user.passwordHash,
+            "hex"
+        );
+
+        return (
+            storedHash.length === hash.length &&
+            crypto.timingSafeEqual(hash, storedHash)
+        );
+
+    } catch {
+        return false;
+    }
+}
+
+  
+function createNewUser(name, email, password) {
+    fs.mkdirSync(USERS_DIR, { recursive: true });
+
+    const users = loadUsers();
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Կրկնակի էլեկտրոնային փոստի արգելում
+    const emailExists = users.some(
+        user =>
+            typeof user.email === "string" &&
+            user.email.toLowerCase() === normalizedEmail
+    );
+
+    if (emailExists) {
+        throw new Error("EMAIL_ALREADY_REGISTERED");
+    }
+
+    const numbers = users.map(user => {
+        const match = /^USER_(\d+)$/.exec(user.id || "");
+        return match ? Number(match[1]) : 0;
+    });
+
+    const nextNumber = Math.max(0, ...numbers) + 1;
+
+    const userId = "USER_" +
+        String(nextNumber).padStart(3, "0");
+
+    const userDirectory = path.join(USERS_DIR, userId);
+
+    // Օգտագործում ենք առկա պանակը, եթե այն արդեն կա։
+    fs.mkdirSync(userDirectory, {
+        recursive: true
+    });
+
+    const memoryFile = path.join(
+        userDirectory,
+        "memory.json"
+    );
+
+    const backupFile = memoryFile + ".backup";
+
+    const historyFile = path.join(
+        userDirectory,
+        "history.json"
+    );
+
+    const emptyMemory = {
+        facts: [],
+        preferences: [],
+        interests: [],
+        devices: [],
+        goals: [],
+        projects: [],
+        games: [],
+        tasks: [],
+        user_name: name.trim(),
+        youtube_channel: "",
+        pending_memory: null
+    };
+
+    // Ստեղծում ենք հիշողությունը միայն այն դեպքում,
+    // երբ ֆայլը գոյություն չունի։
+    if (!fs.existsSync(memoryFile)) {
+        fs.writeFileSync(
+            memoryFile,
+            JSON.stringify(emptyMemory, null, 4),
+            "utf8"
+        );
+    } else {
+        JSON.parse(fs.readFileSync(memoryFile, "utf8"));
+    }
+
+    // Ստեղծում ենք backup միայն բացակայության դեպքում։
+    if (!fs.existsSync(backupFile)) {
+        fs.copyFileSync(memoryFile, backupFile);
+    } else {
+        JSON.parse(fs.readFileSync(backupFile, "utf8"));
+    }
+
+    // Պատմությունը նույնպես չենք վերագրում։
+    if (!fs.existsSync(historyFile)) {
+        fs.writeFileSync(historyFile, "[]", "utf8");
+    } else {
+        JSON.parse(fs.readFileSync(historyFile, "utf8"));
+    }
+
+    const credentials = hashPassword(password);
+
+    const user = {
+        id: userId,
+        name: name.trim(),
+        email: normalizedEmail,
+        ...credentials,
+        createdAt: new Date().toISOString()
+    };
+
+    users.push(user);
+
+    if (!saveUsers(users)) {
+        throw new Error("USERS_DATABASE_SAVE_FAILED");
+    }
+
+    console.log("NEW ZENIX USER:", userId);
+
+    return user;
+}
+
+
+function createAuthToken(userId) {
+    const payload = {
+        userId,
+        expiresAt: Date.now() + AUTH_TOKEN_LIFETIME
+    };
+
+    const encoded = Buffer
+        .from(JSON.stringify(payload))
+        .toString("base64url");
+
+    const signature = crypto
+        .createHmac("sha256", AUTH_SECRET)
+        .update(encoded)
+        .digest("base64url");
+
+    return `${encoded}.${signature}`;
+}
+
+function verifyAuthToken(token) {
+    try {
+        if (typeof token !== "string") return null;
+
+        const parts = token.split(".");
+        if (parts.length !== 2) return null;
+
+        const [encoded, signature] = parts;
+
+        const expected = crypto
+            .createHmac("sha256", AUTH_SECRET)
+            .update(encoded)
+            .digest();
+
+        const received = Buffer.from(signature, "base64url");
+
+        if (
+            received.length !== expected.length ||
+            !crypto.timingSafeEqual(received, expected)
+        ) {
+            return null;
+        }
+
+        const payload = JSON.parse(
+            Buffer.from(encoded, "base64url").toString("utf8")
+        );
+
+        if (
+            !payload ||
+            typeof payload.userId !== "string" ||
+            !/^USER_[A-Z0-9_-]{1,40}$/.test(payload.userId) ||
+            !Number.isFinite(payload.expiresAt) ||
+            payload.expiresAt <= Date.now()
+        ) {
+            return null;
+        }
+
+        return {
+            userId: payload.userId
+        };
+
+    } catch {
+        return null;
+    }
+}
+
+function requireAuth(req, res, next) {
+    const authorization = req.headers.authorization || "";
+
+    if (!authorization.startsWith("Bearer ")) {
+        return res.status(401).json({
+            error: "AUTH_REQUIRED"
+        });
+    }
+
+    const token = authorization.slice(7);
+    const user = verifyAuthToken(token);
+
+    if (!user) {
+        return res.status(401).json({
+            error: "INVALID_AUTH_TOKEN"
+        });
+    }
+
+    req.user = user;
+
+    next();
+}
+
+function userMemoryContext(req, res, next) {
+    try {
+        const userId = req.user?.userId;
+
+        // Միայն ճիշտ ձևաչափով ID
+        if (
+            typeof userId !== "string" ||
+            !/^USER_\d{3,}$/.test(userId)
+        ) {
+            return res.status(403).json({
+                error: "INVALID_USER_ID"
+            });
+        }
+
+        // Ստուգում ենք users.json-ը
+        const users = loadUsers();
+
+        const registeredUser = users.some(
+            user => user.id === userId
+        );
+
+        if (!registeredUser) {
+            return res.status(403).json({
+                error: "USER_NOT_REGISTERED"
+            });
+        }
+
+        // Ստուգում ենք հենց այդ օգտատիրոջ պանակը
+        const userDirectory = path.join(
+            USERS_DIR,
+            userId
+        );
+
+        const memoryFile = path.join(
+            userDirectory,
+            "memory.json"
+        );
+
+        const backupFile = memoryFile + ".backup";
+
+        if (
+            !fs.existsSync(userDirectory) ||
+            (
+                !fs.existsSync(memoryFile) &&
+                !fs.existsSync(backupFile)
+            )
+        ) {
+            console.error(
+                "USER MEMORY FILES MISSING:",
+                userId
+            );
+
+            return res.status(500).json({
+                error: "USER_MEMORY_FILES_MISSING"
+            });
+        }
+
+        // Ստեղծում ենք տվյալ օգտատիրոջ կոնտեքստը
+        memoryStorage.run(
+            { userId },
+            () => next()
+        );
+
+    } catch (error) {
+        console.error(
+            "USER MEMORY CONTEXT ERROR:",
+            error.message
+        );
+
+        return res.status(500).json({
+            error: "USER_MEMORY_CONTEXT_FAILED"
+        });
+    }
+}
+
+/* =====================================================
+   AUTOMATIC USER REGISTRATION
+===================================================== */
+
+
+/* =====================================================
+   ZENIX USER AUTHENTICATION API
+===================================================== */
+
+// ՆՈՐ ՕԳՏԱՏԻՐՈՋ ԳՐԱՆՑՈՒՄ
+app.post("/api/register", (req, res) => {
+    try {
+        const { name, email, password } = req.body || {};
+
+        // Ստուգում ենք պարտադիր դաշտերը
+        if (
+            typeof name !== "string" ||
+            typeof email !== "string" ||
+            typeof password !== "string"
+        ) {
+            return res.status(400).json({
+                success: false,
+                error: "ALL_FIELDS_REQUIRED"
+            });
+        }
+
+        const cleanName = name.trim();
+        const cleanEmail = email.trim().toLowerCase();
+
+        if (cleanName.length < 2 || cleanName.length > 50) {
+            return res.status(400).json({
+                success: false,
+                error: "INVALID_NAME"
+            });
+        }
+
+        if (
+            !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)
+        ) {
+            return res.status(400).json({
+                success: false,
+                error: "INVALID_EMAIL"
+            });
+        }
+
+        if (password.length < 8 || password.length > 128) {
+            return res.status(400).json({
+                success: false,
+                error: "INVALID_PASSWORD"
+            });
+        }
+
+        // Ստեղծում ենք նոր օգտատիրոջը
+        const user = createNewUser(
+            cleanName,
+            cleanEmail,
+            password
+        );
+
+        // Ստեղծում ենք նրա անձնական Token-ը
+        const token = createAuthToken(user.id);
+
+        return res.status(201).json({
+            success: true,
+            userId: user.id,
+            name: user.name,
+            token
+        });
+
+    } catch (error) {
+        console.error(
+            "USER REGISTRATION ERROR:",
+            error.message
+        );
+
+        if (error.message === "EMAIL_ALREADY_REGISTERED") {
+            return res.status(409).json({
+                success: false,
+                error: "EMAIL_ALREADY_REGISTERED"
+            });
+        }
+
+        return res.status(500).json({
+            success: false,
+            error: "REGISTRATION_FAILED"
+        });
+    }
+});
+
+// ԳՈՐԾՈՂ ՕԳՏԱՏԻՐՈՋ ՄՈՒՏՔ
+app.post("/api/login", (req, res) => {
+    try {
+        const { email, password } = req.body || {};
+
+        if (
+            typeof email !== "string" ||
+            typeof password !== "string" ||
+            !email.trim() ||
+            !password
+        ) {
+            return res.status(400).json({
+                success: false,
+                error: "EMAIL_AND_PASSWORD_REQUIRED"
+            });
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+
+        const users = loadUsers();
+
+        const user = users.find(
+            item =>
+                typeof item.email === "string" &&
+                item.email.toLowerCase() === normalizedEmail
+        );
+
+        if (!user || !verifyPassword(password, user)) {
+            return res.status(401).json({
+                success: false,
+                error: "INVALID_CREDENTIALS"
+            });
+        }
+
+        const token = createAuthToken(user.id);
+
+        return res.status(200).json({
+            success: true,
+            userId: user.id,
+            name: user.name,
+            token
+        });
+
+    } catch (error) {
+        console.error(
+            "USER LOGIN ERROR:",
+            error.message
+        );
+
+        return res.status(500).json({
+            success: false,
+            error: "LOGIN_FAILED"
+        });
+    }
+});
+
+// Պաշտպանում ենք անձնական հիշողության ֆայլերը հանրային հասանելիությունից։
+
+
+/* =====================================================
+   ZENIX SECURITY — PRIVATE FILE PROTECTION
+===================================================== */
+
 app.use((req, res, next) => {
-    if (/^\/memory\.json(?:\.tmp|\.backup)?$/i.test(req.path)) {
+    const privatePaths = [
+        // Անհատական հիշողություն
+        /^\/memory\.json(?:\.tmp|\.backup)?$/i,
+        /^\/memory_users(?:\/|$)/i,
+        /^\/users(?:\/|$)/i,
+        /^\/legacy(?:\/|$)/i,
+
+        // Օգտատերերի տվյալներ և Token-ներ
+        /^\/users\.json$/i,
+        /^\/[^/]*token[^/]*\.txt$/i,
+
+        // Պահուստային պանակներ
+        /^\/SAFE_BACKUP[^/]*(?:\/|$)/i,
+        /^\/users-full-backup[^/]*(?:\/|$)/i,
+        /^\/backup[^/]*(?:\/|$)/i,
+
+        // Սերվերի գաղտնի ֆայլեր
+        /^\/server\.js$/i,
+        /^\/\.env(?:\..*)?$/i,
+        /^\/\.git(?:\/|$)/i
+    ];
+
+    if (privatePaths.some(pattern => pattern.test(req.path))) {
         return res.sendStatus(404);
     }
 
     next();
 });
 
+// Միայն մեկ հանրային ստատիկ սերվեր
 app.use(express.static(__dirname));
 
 /* =====================================================
    LANGUAGE
 ===================================================== */
+
 
 function reply(armenian, russian, english, language = "Armenian") {
     const lang = String(language || "").toLowerCase();
@@ -291,19 +967,18 @@ function normalizeText(value) {
 /* =====================================================
    MEMORY DIRECTORY
 ===================================================== */
-
 function createMemoryBackup() {
+    const paths = getMemoryPaths();
+
     try {
-        if (!fs.existsSync(MEMORY_FILE)) return true;
+        fs.mkdirSync(paths.directory, { recursive: true });
 
-        const current = fs.readFileSync(MEMORY_FILE, "utf8");
+        if (!fs.existsSync(paths.file)) return true;
 
+        const current = fs.readFileSync(paths.file, "utf8");
         JSON.parse(current);
 
-        fs.copyFileSync(
-            MEMORY_FILE,
-            MEMORY_BACKUP_FILE
-        );
+        fs.copyFileSync(paths.file, paths.backup);
 
         return true;
 
@@ -341,13 +1016,16 @@ function ensureMemoryDirectory() {
     }
 }
 
-
-
 function saveMemory(memory) {
+  
+    const paths = getMemoryPaths();
+
+
+
     let savedSuccessfully = false;
 
     try {
-        if (!ensureMemoryDirectory()) return false;
+        fs.mkdirSync(paths.directory, { recursive: true });
 
         const safeMemory = normalizeMemory(memory);
 
@@ -359,14 +1037,14 @@ function saveMemory(memory) {
 
         // Ժամանակավոր ֆայլի պահպանում
         fs.writeFileSync(
-            MEMORY_TEMP_FILE,
+            paths.temp,
             memoryJSON,
             "utf8"
         );
 
         // Ստուգում ենք JSON-ը
         const verifiedMemory = JSON.parse(
-            fs.readFileSync(MEMORY_TEMP_FILE, "utf8")
+            fs.readFileSync(paths.temp, "utf8")
         );
 
         if (
@@ -379,8 +1057,8 @@ function saveMemory(memory) {
 
         // Փոխարինում ենք հիմնական ֆայլը
         fs.renameSync(
-            MEMORY_TEMP_FILE,
-            MEMORY_FILE
+            paths.temp,
+            paths.file
         );
 
         savedSuccessfully = true;
@@ -392,11 +1070,11 @@ function saveMemory(memory) {
             safeMemory.preferences
         );
 
-        // Backup-ը թարմացնում ենք առանձին
+        // Backup-ի թարմացում
         try {
             fs.copyFileSync(
-                MEMORY_FILE,
-                MEMORY_BACKUP_FILE
+                paths.file,
+                paths.backup
             );
 
             console.log("ZENIX BACKUP UPDATED!");
@@ -417,11 +1095,11 @@ function saveMemory(memory) {
         );
 
         return savedSuccessfully;
-        
+
     } finally {
         try {
-            if (fs.existsSync(MEMORY_TEMP_FILE)) {
-                fs.unlinkSync(MEMORY_TEMP_FILE);
+            if (fs.existsSync(paths.temp)) {
+                fs.unlinkSync(paths.temp);
             }
         } catch {}
     }
@@ -497,21 +1175,20 @@ memory[collection] = memory[collection].filter(item => {
 
 
 function loadMemory() {
+    const paths = getMemoryPaths();
+
     const empty = normalizeMemory({});
 
     try {
-        if (!ensureMemoryDirectory()) {
-            return empty;
-        }
+        fs.mkdirSync(paths.directory, { recursive: true });
 
         // 1. Ստուգում ենք հիմնական հիշողությունը
-        if (fs.existsSync(MEMORY_FILE)) {
+        if (fs.existsSync(paths.file)) {
             try {
                 const raw = JSON.parse(
-                    fs.readFileSync(MEMORY_FILE, "utf8")
+                    fs.readFileSync(paths.file, "utf8")
                 );
 
-                // Չենք ընդունում սխալ կառուցվածքով JSON
                 if (
                     !raw ||
                     typeof raw !== "object" ||
@@ -524,12 +1201,11 @@ function loadMemory() {
 
                 console.log("ZENIX MEMORY LOADED!");
 
-                // Backup-ը թարմացնում ենք միայն
-                // հաջող ընթերցումից և ստուգումից հետո
+                // Backup-ի թարմացում
                 try {
                     fs.copyFileSync(
-                        MEMORY_FILE,
-                        MEMORY_BACKUP_FILE
+                        paths.file,
+                        paths.backup
                     );
 
                     console.log("ZENIX BACKUP UPDATED!");
@@ -552,11 +1228,11 @@ function loadMemory() {
         }
 
         // 2. Փորձում ենք վերականգնել Backup-ից
-        if (fs.existsSync(MEMORY_BACKUP_FILE)) {
+        if (fs.existsSync(paths.backup)) {
             try {
                 const backup = JSON.parse(
                     fs.readFileSync(
-                        MEMORY_BACKUP_FILE,
+                        paths.backup,
                         "utf8"
                     )
                 );
@@ -608,6 +1284,7 @@ function loadMemory() {
         return empty;
     }
 }
+
 
 
 
@@ -1658,7 +2335,6 @@ const forgetAll =
 }
 
 
-
 function normalizeGame(value) {
     let text = String(value || "")
         .toLowerCase()
@@ -1678,8 +2354,11 @@ function normalizeGame(value) {
         .replace(/^(?:խաղում եմ|սիրում եմ)\s+/u, "")
         .trim();
 
-    // Հեռացնում ենք հայերեն վերջավոր հոդերը
-    text = text.replace(/(?:ը|ն|ս)$/u, "").trim();
+    // Հեռացնում ենք միայն առանձին վերջում ավելացված հոդը
+    // Խաղի անվան վերջին տառերը չենք փոխում։
+    text = text
+        .replace(/\s+(?:ը|ն|ս)$/u, "")
+        .trim();
 
     // Միասնականացնում ենք բացատները
     text = text
@@ -1692,6 +2371,7 @@ function normalizeGame(value) {
 
 
 
+
 /* =====================================================
    UPDATE FUTURE PREFERENCE
 ===================================================== */
@@ -1700,9 +2380,11 @@ function normalizeGame(value) {
 // ===============================
 
 console.log("\n========== END GAME TEST ==========\n");
+
+
 function updateFuturePreference(message) {
     const memory = loadMemory();
-    const text = String(message || "").trim();
+    const text = normalizeText(String(message || "").trim());
 
     if (!text) return false;
 
@@ -1724,6 +2406,38 @@ function updateFuturePreference(message) {
 
     if (!value || isSensitiveMemory(value)) return false;
 
+    // Հեռացնում ենք նախադասության վերջի կետադրությունը
+    value = value.replace(/[։.!?]+$/u, "").trim();
+
+    // Ճանաչում ենք կատեգորիաները և դրանց վերջավորությունները
+    const preferenceMatch = value.match(
+        /^(?:իմ\s+)?սիրելի\s+(միրգ(?:ը|ս)?|միրգյ|մրգ(?:ը|ս)?|սպորտաձև(?:ը|ս)?|սպորտաձեվ(?:ը|ս)?|սպորտ(?:ը|ս)?|կենդանի(?:ն|ս)?|մեքենա(?:ն|ս)?|գույն(?:ը|ս)?)\s+(.+)$/iu
+    );
+
+    if (preferenceMatch) {
+        const rawCategory = preferenceMatch[1]
+            .replace(/(?:ը|ն|ս)$/u, "");
+
+        const category = normalizePreferenceCategory(rawCategory);
+
+        const preferenceValue = preferenceMatch[2]
+            .replace(/\s+է$/u, "")
+            .trim();
+
+        if (!category || !preferenceValue) return false;
+
+        if (isSensitiveMemory(preferenceValue)) return false;
+
+        const saved = savePreference(
+            memory,
+            category,
+            preferenceValue
+        );
+
+        return saved ? saveMemory(memory) : false;
+    }
+
+    // Չճանաչված ձևերը պահպանում ենք հին մեխանիզմով
     const saved = addMemoryItem(
         memory,
         "preferences",
@@ -1734,6 +2448,7 @@ function updateFuturePreference(message) {
         ? saveMemory(memory)
         : saved === "exists";
 }
+
 
 /* =====================================================
    MEMORY SUMMARY
@@ -1890,10 +2605,10 @@ const preferenceQuestions = [
         key: "սպորտ",
         words: ["սպորտ", "բոքս", "բռնցքամարտ"]
     },
-    {
-        key: "կենդանի",
-        words: ["կենդանի", "կատու", "շուն"]
-    },
+   {
+    key: "կենդանի",
+    words: ["կենդանի", "կենդանին", "ընտանի կենդանի"]
+},
     {
         key: "գույն",
         words: ["գույն"]
@@ -1920,6 +2635,10 @@ if (preferenceQuestion) {
     }
 }
 
+    const category = categories.find(item =>
+        hasAny(...item.words)
+    );
+
     if (category) {
         const items = Array.isArray(memory[category.key])
             ? memory[category.key].filter(
@@ -1942,8 +2661,10 @@ if (preferenceQuestion) {
 
 ${items.map((item, index) =>
             `${index + 1}. ${item}`
-        ).join("\n")}`;
+             ).join("\n")}`;
+
     }
+    
 
     // Ամբողջ հիշողության ամփոփում
     if (
@@ -2293,7 +3014,11 @@ ${memory.devices.join("\n")}
    API CHAT
 ===================================================== */
 
-app.post("/api/chat", async (req, res) => {
+app.post(
+    "/api/chat",
+    requireAuth,
+    userMemoryContext,
+    async (req, res) => {
     try {
         const { history } = req.body;
 
@@ -2542,14 +3267,33 @@ if (automaticMemory === false) {
    MEMORY STATUS
 ===================================================== */
 
-app.get("/api/memory", (req, res) => {
-    const memory = loadMemory();
 
-    return res.json({
-        summary: getMemorySummary(memory),
-        memory
-    });
-});
+app.get(
+    "/api/memory",
+    requireAuth,
+    userMemoryContext,
+    (req, res) => {
+        try {
+            const memory = loadMemory();
+
+            return res.json({
+                userId: req.user.userId,
+                summary: getMemorySummary(memory),
+                memory
+            });
+
+        } catch (error) {
+            console.error(
+                "MEMORY API ERROR:",
+                error.message
+            );
+
+            return res.status(500).json({
+                error: "MEMORY_LOAD_FAILED"
+            });
+        }
+    }
+);
 
 /* =====================================================
    START SERVER
