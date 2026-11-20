@@ -1,18 +1,27 @@
+
 // ==========================================
-// CONFIG
+// ZENIX CONFIG
 // ==========================================
 
-// Եթե ֆրոնտը բացվում է նույն Render սերվերից, թողեք դատարկ։
-// Եթե ֆրոնտը GitHub Pages-ում է (dawwwwo20.github.io), գրեք Render-ի հասցեն,
-// օրինակ՝ "https://your-app.onrender.com"
-const API_BASE = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1"
-    ? "http://localhost:3000"
-    : "https://zenix-ai-y404.onrender.com";
+const API_BASE =
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1"
+        ? "http://localhost:3000"
+        : "https://zenix-ai-y404.onrender.com";
+
 const robot = document.getElementById("robot");
 const mouth = document.querySelector(".robot-mouth");
 
 const input = document.getElementById("userInput");
 const sendBtn = document.getElementById("sendBtn");
+// ==========================================
+// ZENIX CHAT ELEMENTS
+// ==========================================
+
+const newChatBtn = document.getElementById("newChatBtn");
+const chatList = document.getElementById("chatList");
+const chatEmptyState = document.getElementById("chatEmptyState");
+const chatSearchInput = document.getElementById("chatSearchInput");
 const voiceBtn = document.getElementById("voiceBtn");
 const messages = document.getElementById("messages");
 
@@ -25,15 +34,16 @@ let recordedChunks = [];
 let listening = false;
 let starting = false;
 
+
 // ==========================================
-// SESSION ID (յուրաքանչյուր օգտատիրոջ առանձին հիշողության համար)
+// SESSION ID
 // ==========================================
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{8,64}$/;
 
 function makeSessionId() {
-    if (window.crypto && typeof crypto.randomUUID === "function") {
-        return crypto.randomUUID();
+    if (window.crypto && typeof window.crypto.randomUUID === "function") {
+        return window.crypto.randomUUID();
     }
 
     return (
@@ -59,19 +69,19 @@ function getSessionId() {
         return id;
 
     } catch {
-        // localStorage-ը անհասանելի է (օր.՝ private mode)
-        if (!fallbackSessionId) fallbackSessionId = makeSessionId();
+        if (!fallbackSessionId) {
+            fallbackSessionId = makeSessionId();
+        }
 
         return fallbackSessionId;
     }
 }
 
-const sessionId = getSessionId();
+let sessionId = getSessionId();
 
-
-/* ==========================================
-   ZENIX USER AUTHENTICATION
-========================================== */
+// ==========================================
+// AUTHENTICATION
+// ==========================================
 
 const AUTH_TOKEN_KEY = "zenix_auth_token";
 
@@ -128,6 +138,7 @@ function saveAuthToken(token, remember = true) {
         throw new Error("AUTH_STORAGE_ERROR");
     }
 }
+
 function saveAuthUser(data, remember = true) {
     if (!data || typeof data.name !== "string" || !data.name.trim()) {
         throw new Error("INVALID_AUTH_USER");
@@ -146,12 +157,14 @@ function saveAuthUser(data, remember = true) {
         throw new Error("AUTH_STORAGE_ERROR");
     }
 }
+
 function logoutUser() {
     try {
         localStorage.removeItem(AUTH_TOKEN_KEY);
         sessionStorage.removeItem(AUTH_TOKEN_KEY);
         localStorage.removeItem("zenix_user_name");
-sessionStorage.removeItem("zenix_user_name");
+        sessionStorage.removeItem("zenix_user_name");
+
     } catch (error) {
         console.error("AUTH LOGOUT ERROR:", error);
     }
@@ -159,6 +172,7 @@ sessionStorage.removeItem("zenix_user_name");
     authToken = null;
     window.location.href = "register.html";
 }
+
 function escapeHTML(value) {
     return String(value).replace(/[&<>"']/g, function (char) {
         const entities = {
@@ -173,28 +187,37 @@ function escapeHTML(value) {
     });
 }
 
-
 function updateAuthArea() {
     const authArea = document.getElementById("authArea");
 
     if (!authArea) return;
 
-    const userName =
-        localStorage.getItem("zenix_user_name") ||
-        sessionStorage.getItem("zenix_user_name");
+    let userName = "";
+
+    try {
+        userName =
+            localStorage.getItem("zenix_user_name") ||
+            sessionStorage.getItem("zenix_user_name") ||
+            "";
+    } catch (error) {
+        console.error("AUTH USER READ ERROR:", error);
+    }
 
     if (userName) {
         authArea.innerHTML = `
             <div class="auth-user">
                 <span class="user-profile">
-    <i data-lucide="user-round"></i>
+                    <i data-lucide="user-round"></i>
                     ${escapeHTML(userName)}
                 </span>
 
-                <button class="logout-button"
+                <button
+                    class="logout-button"
                     onclick="logoutUser()"
                     title="Ելք"
-                    aria-label="Ելք">
+                    aria-label="Ելք"
+                    type="button"
+                >
                     ↪
                 </button>
             </div>
@@ -210,8 +233,9 @@ function updateAuthArea() {
 
 updateAuthArea();
 
+
 // ==========================================
-// ZENIX LOGIN AND REGISTER
+// LOGIN AND REGISTER
 // ==========================================
 
 const loginForm = document.getElementById("login-form");
@@ -243,11 +267,14 @@ function setAuthLoading(button, loading, originalText) {
     button.style.opacity = loading ? "0.6" : "1";
     button.style.cursor = loading ? "wait" : "pointer";
 
-    button.innerHTML = loading
-        ? "Խնդրում եմ սպասիր..."
-        : originalText;
-}
+    const textElement = button.querySelector(".button-text");
 
+    if (textElement) {
+        textElement.textContent = loading
+            ? "Խնդրում եմ սպասիր..."
+            : originalText;
+    }
+}
 async function authRequest(endpoint, payload) {
     const response = await fetch(API_BASE + endpoint, {
         method: "POST",
@@ -286,7 +313,9 @@ async function authRequest(endpoint, payload) {
     return data;
 }
 
+
 // REGISTER
+
 async function registerUser() {
     if (!registerForm || !registerButton) return;
 
@@ -314,7 +343,8 @@ async function registerUser() {
         });
 
         saveAuthToken(data.token, true);
-saveAuthUser(data, true);
+        saveAuthUser(data, true);
+
         showAuthMessage("Գրանցումը հաջողվեց։ Բարի գալուստ ZENIX։");
 
         window.location.href = "index.html";
@@ -328,7 +358,9 @@ saveAuthUser(data, true);
     }
 }
 
+
 // LOGIN
+
 async function loginUser() {
     if (!loginForm || !loginButton) return;
 
@@ -337,7 +369,8 @@ async function loginUser() {
     const email = document.getElementById("login-email").value.trim();
     const password = document.getElementById("login-password").value;
 
-    const remember = document.getElementById("remember-me")?.checked ?? false;
+    const remember =
+        document.getElementById("remember-me")?.checked ?? false;
 
     const originalText = "ՄՈՒՏՔ ԳՈՐԾԵԼ <span>→</span>";
 
@@ -350,7 +383,8 @@ async function loginUser() {
         });
 
         saveAuthToken(data.token, remember);
-saveAuthUser(data, remember);
+        saveAuthUser(data, remember);
+
         showAuthMessage("Մուտքը հաջողվեց։ Բարի վերադարձ։");
 
         window.location.href = "index.html";
@@ -399,10 +433,11 @@ if (authMessage) {
         });
     }
 }
+
+
 // ==========================================
 // ROBOT ANIMATIONS
 // ==========================================
-
 
 function startTalking() {
     talking = true;
@@ -426,13 +461,11 @@ function robotTalk() {
     }, 1800);
 }
 
-// ZENIX greeting animation
 function waveRobot() {
     if (!robot) return;
 
     robot.classList.remove("waving");
 
-    // Restart animation
     void robot.offsetWidth;
 
     robot.classList.add("waving");
@@ -442,7 +475,6 @@ function waveRobot() {
     }, 3400);
 }
 
-// Detect greetings
 function checkGreeting(text) {
     const normalized = text
         .toLowerCase()
@@ -468,11 +500,14 @@ function checkGreeting(text) {
     );
 }
 
+
 // ==========================================
 // CHAT MESSAGES
 // ==========================================
 
 function addMessage(text, sender = "bot") {
+    if (!messages) return null;
+
     const message = document.createElement("div");
 
     message.className = sender === "user"
@@ -488,6 +523,8 @@ function addMessage(text, sender = "bot") {
 }
 
 function showLoading() {
+    if (!messages) return null;
+
     const loading = document.createElement("div");
 
     loading.className = "message loading-message";
@@ -499,11 +536,11 @@ function showLoading() {
     return loading;
 }
 
+
 // ==========================================
-// VOICE OUTPUT (դեռ անջատված է. տե՛ս sendMessage)
+// AUDIO UTILITIES
 // ==========================================
 
-// Convert base64 audio to WAV
 function base64ToWav(base64, sampleRate = 24000) {
     const binary = atob(base64);
     const length = binary.length;
@@ -538,7 +575,11 @@ function base64ToWav(base64, sampleRate = 24000) {
     return new Blob([buffer], { type: "audio/wav" });
 }
 
-// Browser voice fallback
+
+// ==========================================
+// BROWSER VOICE FALLBACK
+// ==========================================
+
 function speakWithBrowser(text) {
     return new Promise((resolve, reject) => {
         if (
@@ -553,19 +594,32 @@ function speakWithBrowser(text) {
 
         const utterance = new SpeechSynthesisUtterance(text);
 
-        utterance.lang = "hy-AM";
-        utterance.rate = 0.95;
-        utterance.pitch = 1;
-        utterance.volume = 1;
+        const currentLanguage =
+            window.ZENIX_LANGUAGE?.getCurrentLanguage() || "hy";
+
+        const voiceLanguages = {
+            hy: "hy-AM",
+            en: "en-US",
+            ru: "ru-RU",
+            es: "es-ES",
+            fr: "fr-FR"
+        };
+
+        const selectedLanguage =
+            voiceLanguages[currentLanguage] || "hy-AM";
+
+        utterance.lang = selectedLanguage;
 
         const voices = window.speechSynthesis.getVoices();
 
-        const armenianVoice = voices.find(voice =>
-            /^hy(-|$)/i.test(voice.lang)
+        const selectedVoice = voices.find(voice =>
+            voice.lang.toLowerCase() === selectedLanguage.toLowerCase()
+        ) || voices.find(voice =>
+            voice.lang.toLowerCase().startsWith(currentLanguage)
         );
 
-        if (armenianVoice) {
-            utterance.voice = armenianVoice;
+        if (selectedVoice) {
+            utterance.voice = selectedVoice;
         }
 
         utterance.onstart = () => {
@@ -586,7 +640,11 @@ function speakWithBrowser(text) {
     });
 }
 
-// Main ZENIX voice
+
+// ==========================================
+// MAIN ZENIX VOICE
+// ==========================================
+
 async function speakReply(text) {
     let audioUrl = null;
 
@@ -622,6 +680,7 @@ async function speakReply(text) {
             }
 
             audioBlob = new Blob([bytes], { type: "audio/wav" });
+
         } else {
             const match = mimeType.match(/rate=(\d+)/i);
             const sampleRate = match ? Number(match[1]) : 24000;
@@ -671,9 +730,125 @@ async function speakReply(text) {
     }
 }
 
+
 // ==========================================
 // SEND MESSAGE
 // ==========================================
+
+
+
+async function sendMessage() {
+    if (!input || !messages || busy) return;
+
+    const text = input.value.trim();
+
+    if (!text) return;
+
+    let token;
+
+    try {
+        token = getAuthToken();
+    } catch (error) {
+        logoutUser();
+        return;
+    }
+
+    if (checkGreeting(text)) {
+        waveRobot();
+    }
+
+    busy = true;
+    input.value = "";
+
+    addMessage(text, "user");
+
+    history.push({
+        role: "user",
+        text
+    });
+
+    const loading = showLoading();
+
+    if (sendBtn) {
+        sendBtn.disabled = true;
+    }
+
+    try {
+        const response = await fetch(API_BASE + "/api/chat", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + token
+            },
+            body: JSON.stringify({
+                sessionId,
+                history
+            })
+        });
+
+        const data = await response.json();
+
+        if (response.status === 401) {
+            logoutUser();
+            return;
+        }
+
+        if (!response.ok) {
+            throw new Error(data.error || "ZENIX CHAT ERROR");
+        }
+
+        if (
+            typeof data.reply !== "string" ||
+            !data.reply.trim()
+        ) {
+            throw new Error("ZENIX-ը դատարկ պատասխան է վերադարձրել։");
+        }
+
+        history.push({
+            role: "assistant",
+            text: data.reply
+        });
+
+        addMessage(data.reply, "bot");
+
+        robotTalk();
+
+    } catch (error) {
+        console.error("ZENIX CHAT ERROR:", error);
+
+        addMessage(
+            "Ներողություն, կապի ժամանակ սխալ առաջացավ։ Փորձիր կրկին։"
+        );
+
+    } finally {
+        if (loading) loading.remove();
+
+        busy = false;
+
+        if (sendBtn) {
+            sendBtn.disabled = false;
+        }
+
+        if (input) {
+            input.focus();
+        }
+    }
+}
+
+
+
+
+// SEND BUTTON
+if (sendBtn) {
+    sendBtn.addEventListener("click", sendMessage);
+} else {
+    console.error("ZENIX: sendBtn not found");
+}
+
+// ==========================================
+// ZENIX SEND MESSAGE
+// ==========================================
+
 async function sendMessage() {
     if (!input || !messages) return;
 
@@ -695,7 +870,6 @@ async function sendMessage() {
     }
 
     busy = true;
-
     input.value = "";
 
     addMessage(text, "user");
@@ -707,7 +881,9 @@ async function sendMessage() {
 
     const loading = showLoading();
 
-    if (sendBtn) sendBtn.disabled = true;
+    if (sendBtn) {
+        sendBtn.disabled = true;
+    }
 
     try {
         const response = await fetch(API_BASE + "/api/chat", {
@@ -731,12 +907,13 @@ async function sendMessage() {
         }
 
         if (!response.ok) {
-            throw new Error(
-                data.error || "ZENIX CHAT ERROR"
-            );
+            throw new Error(data.error || "ZENIX CHAT ERROR");
         }
 
-        if (typeof data.reply !== "string" || !data.reply.trim()) {
+        if (
+            typeof data.reply !== "string" ||
+            !data.reply.trim()
+        ) {
             throw new Error("ZENIX-ը դատարկ պատասխան է վերադարձրել։");
         }
 
@@ -757,21 +934,26 @@ async function sendMessage() {
         );
 
     } finally {
-        loading.remove();
+        if (loading) {
+            loading.remove();
+        }
 
         busy = false;
 
-        if (sendBtn) sendBtn.disabled = false;
+        if (sendBtn) {
+            sendBtn.disabled = false;
+        }
 
-        if (input) input.focus();
+        if (input) {
+            input.focus();
+        }
     }
 }
-// Send button
-if (sendBtn) {
-    sendBtn.addEventListener("click", sendMessage);
-}
 
-// Enter key
+
+
+// ENTER KEY
+
 if (input) {
     input.addEventListener("keydown", event => {
         if (event.key === "Enter" && !event.shiftKey) {
@@ -781,11 +963,11 @@ if (input) {
     });
 }
 
+
 // ==========================================
 // MICROPHONE
 // ==========================================
 
-// Start microphone recording
 async function startListening() {
     if (listening || starting) return;
 
@@ -798,6 +980,7 @@ async function startListening() {
     }
 
     starting = true;
+
     let stream = null;
 
     try {
@@ -866,7 +1049,9 @@ async function startListening() {
     }
 }
 
-// Stop recording
+
+// STOP RECORDING
+
 function stopListening() {
     if (mediaRecorder && mediaRecorder.state !== "inactive") {
         mediaRecorder.stop();
@@ -880,7 +1065,9 @@ function stopListening() {
     }
 }
 
-// Send recorded audio to server
+
+// TRANSCRIPTION
+
 async function sendAudioForTranscription(blob, mimeType) {
     if (!blob.size) {
         addMessage("Ձայնագրությունը դատարկ է։");
@@ -897,9 +1084,11 @@ async function sendAudioForTranscription(blob, mimeType) {
 
             const response = await fetch(API_BASE + "/api/transcribe", {
                 method: "POST",
+
                 headers: {
                     "Content-Type": "application/json"
                 },
+
                 body: JSON.stringify({
                     audio: base64,
                     mimeType
@@ -933,6 +1122,7 @@ async function sendAudioForTranscription(blob, mimeType) {
                 addMessage(
                     "ZENIX-ի ձայնային ծառայության անվճար սահմանաչափը սպառվել է։ ❤️ Փորձիր ավելի ուշ։"
                 );
+
             } else {
                 addMessage(
                     "Ձայնի ճանաչման ժամանակ սխալ տեղի ունեցավ։ Խնդրում եմ կրկին փորձիր։"
@@ -949,7 +1139,9 @@ async function sendAudioForTranscription(blob, mimeType) {
     reader.readAsDataURL(blob);
 }
 
-// Microphone button
+
+// MICROPHONE BUTTON
+
 if (voiceBtn) {
     voiceBtn.type = "button";
 
@@ -962,11 +1154,344 @@ if (voiceBtn) {
     });
 }
 
+
 // ==========================================
-// START
+// START ZENIX
 // ==========================================
 
 console.log("ZENIX CHAT CONNECTED! 💙");
 
-// Ողջույնի անիմացիա էջը բացվելիս (ինքն էլ անջատվում է)
 waveRobot();
+
+
+// ==========================================
+// ZENIX PAGE NAVIGATION
+// ==========================================
+
+(function initZenixNavigation() {
+    "use strict";
+
+    const pages = {
+        home: document.getElementById("homePage"),
+        chats: document.getElementById("chatsPage"),
+        favorites: document.getElementById("favoritesPage"),
+        settings: document.getElementById("settingsPanel")
+    };
+
+    const titleKeys = {
+        home: "interface.title",
+        chats: "navigation.chats",
+        favorites: "navigation.favorites",
+        settings: "interface.settings"
+    };
+
+    const fallbackTitles = {
+        home: "Բարի գալուստ ZENIX",
+        chats: "Զրույցներ",
+        favorites: "Սիրվածներ",
+        settings: "Կարգավորումներ"
+    };
+
+    const title = document.getElementById("pageTitle");
+
+    const buttons = document.querySelectorAll(
+        ".sidebar nav button[data-page]"
+    );
+
+    let currentPage = "home";
+
+    function updatePageTitle() {
+        if (!title) return;
+
+        const key = titleKeys[currentPage];
+
+        const translated = window.ZENIX_T
+            ? window.ZENIX_T(key, "")
+            : "";
+
+        title.textContent =
+            translated || fallbackTitles[currentPage];
+    }
+
+    function openPage(name) {
+        if (!pages[name]) return;
+
+        currentPage = name;
+
+        Object.entries(pages).forEach(([key, page]) => {
+            if (!page) return;
+
+            page.hidden = key !== name;
+            page.classList.toggle("active", key === name);
+        });
+
+        buttons.forEach(button => {
+            button.classList.toggle(
+                "active",
+                button.dataset.page === name
+            );
+        });
+
+        updatePageTitle();
+
+        try {
+            sessionStorage.setItem("zenix_current_page", name);
+        } catch (error) {
+            console.warn("PAGE STORAGE ERROR:", error);
+        }
+    }
+
+    buttons.forEach(button => {
+        button.addEventListener("click", () => {
+            openPage(button.dataset.page);
+        });
+    });
+
+    document.querySelectorAll(".back-home").forEach(button => {
+        button.addEventListener("click", () => {
+            openPage("home");
+        });
+    });
+
+    openPage("home");
+
+    window.ZENIX_NAVIGATION = {
+        openPage,
+        getCurrentPage: () => currentPage,
+        updatePageTitle
+    };
+
+    console.log("ZENIX NAVIGATION CONNECTED 💙");
+})();
+
+
+// ==========================================
+// ZENIX LANGUAGE SYSTEM
+// ==========================================
+
+(function initZenixLanguage() {
+    "use strict";
+
+    const languageSelect = document.getElementById("languageSelect");
+
+    const LANGUAGE_STORAGE_KEY = "zenix_language";
+
+    if (!languageSelect) {
+        console.error("ZENIX LANGUAGE: languageSelect not found");
+        return;
+    }
+
+    if (
+        !window.ZENIX_LANGUAGE ||
+        !window.ZENIX_TRANSLATIONS ||
+        typeof window.ZENIX_T !== "function"
+    ) {
+        console.error("ZENIX LANGUAGE SYSTEM NOT LOADED");
+        return;
+    }
+
+    function getSavedLanguage() {
+        try {
+            const saved = localStorage.getItem(LANGUAGE_STORAGE_KEY);
+
+            return window.ZENIX_LANGUAGE.isSupportedLanguage(saved)
+                ? saved
+                : "hy";
+
+        } catch (error) {
+            console.warn("LANGUAGE STORAGE ERROR:", error);
+            return "hy";
+        }
+    }
+
+    function applyPageTranslations() {
+        const translate = window.ZENIX_T;
+
+        if (typeof translate !== "function") return;
+
+        document.querySelectorAll("[data-i18n]").forEach(element => {
+            const key = element.getAttribute("data-i18n");
+
+            const translated = translate(key, "");
+
+            if (translated) {
+                element.textContent = translated;
+            }
+        });
+
+        document.querySelectorAll("[data-i18n-placeholder]").forEach(element => {
+            const key = element.getAttribute("data-i18n-placeholder");
+
+            const translated = translate(key, "");
+
+            if (translated) {
+                element.placeholder = translated;
+            }
+        });
+
+        document.querySelectorAll("[data-i18n-title]").forEach(element => {
+            const key = element.getAttribute("data-i18n-title");
+
+            const translated = translate(key, "");
+
+            if (translated) {
+                element.title = translated;
+            }
+        });
+
+        document.documentElement.lang =
+            window.ZENIX_LANGUAGE.getCurrentLanguage();
+
+        const language = window.ZENIX_LANGUAGE.getLanguage();
+
+        document.documentElement.dir =
+            language?.direction || "ltr";
+
+        window.ZENIX_NAVIGATION?.updatePageTitle();
+    }
+
+    function changeLanguage(code) {
+        try {
+            const language = window.ZENIX_LANGUAGE.setLanguage(code);
+
+            languageSelect.value = code;
+
+            try {
+                localStorage.setItem(LANGUAGE_STORAGE_KEY, code);
+            } catch (error) {
+                console.warn("LANGUAGE SAVE ERROR:", error);
+            }
+
+            applyPageTranslations();
+
+            console.log("ZENIX LANGUAGE CHANGED:", language.name);
+
+        } catch (error) {
+            console.error("ZENIX LANGUAGE ERROR:", error);
+
+            languageSelect.value =
+                window.ZENIX_LANGUAGE.getCurrentLanguage();
+        }
+    }
+
+    // RESTORE SAVED LANGUAGE
+
+    const savedLanguage = getSavedLanguage();
+
+    changeLanguage(savedLanguage);
+
+    // LANGUAGE SELECTOR
+
+    languageSelect.addEventListener("change", event => {
+        changeLanguage(event.target.value);
+    });
+
+    // LANGUAGE CHANGE EVENT
+
+    window.addEventListener(
+        "zenix:languageChanged",
+        applyPageTranslations
+    );
+
+    console.log("ZENIX LANGUAGE CONNECTED 💙");
+
+})();
+// ==========================================
+// ZENIX MOBILE PANEL CONTROL
+// Ավելացնել cods.js-ի ամենավերջում
+// ==========================================
+
+(function initZenixMobilePanels() {
+    "use strict";
+
+    const menuBtn = document.getElementById("mobileMenuBtn");
+    const statusBtn = document.getElementById("mobileStatusBtn");
+    const overlay = document.getElementById("mobileOverlay");
+
+    const sidebar = document.querySelector(".sidebar");
+    const rightbar = document.querySelector(".rightbar");
+
+    if (!menuBtn || !statusBtn || !overlay || !sidebar || !rightbar) {
+        console.warn("ZENIX MOBILE PANELS: Required elements not found");
+        return;
+    }
+
+    function closePanels() {
+        document.body.classList.remove(
+            "zenix-left-open",
+            "zenix-right-open"
+        );
+
+        menuBtn.setAttribute("aria-expanded", "false");
+        statusBtn.setAttribute("aria-expanded", "false");
+        overlay.setAttribute("aria-hidden", "true");
+    }
+
+    function openLeftPanel() {
+        closePanels();
+
+        document.body.classList.add("zenix-left-open");
+
+        menuBtn.setAttribute("aria-expanded", "true");
+        overlay.setAttribute("aria-hidden", "false");
+    }
+
+    function openRightPanel() {
+        closePanels();
+
+        document.body.classList.add("zenix-right-open");
+
+        statusBtn.setAttribute("aria-expanded", "true");
+        overlay.setAttribute("aria-hidden", "false");
+    }
+
+    menuBtn.addEventListener("click", () => {
+        const isOpen = document.body.classList.contains("zenix-left-open");
+
+        if (isOpen) {
+            closePanels();
+        } else {
+            openLeftPanel();
+        }
+    });
+
+    statusBtn.addEventListener("click", () => {
+        const isOpen = document.body.classList.contains("zenix-right-open");
+
+        if (isOpen) {
+            closePanels();
+        } else {
+            openRightPanel();
+        }
+    });
+
+    overlay.addEventListener("click", closePanels);
+
+    // Մենյուից էջ ընտրելուց հետո փակում ենք վահանակը
+    sidebar.addEventListener("click", event => {
+        const pageButton = event.target.closest(
+            "nav button[data-page]"
+        );
+
+        if (pageButton) {
+            closePanels();
+        }
+    });
+
+    // Փակում ենք Escape կոճակով
+    document.addEventListener("keydown", event => {
+        if (event.key === "Escape") {
+            closePanels();
+        }
+    });
+
+    // Եթե հեռախոսից անցնում ենք մեծ էկրան, փակում ենք վահանակները
+    window.addEventListener("resize", () => {
+        if (window.innerWidth > 750) {
+            closePanels();
+        }
+    });
+
+    console.log("ZENIX MOBILE PANELS CONNECTED 💙");
+
+})();
