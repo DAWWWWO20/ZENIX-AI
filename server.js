@@ -7,14 +7,18 @@
 const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
+const express = require("express");
+
+const app = express();
+
+app.use(express.json());
+
 const { AsyncLocalStorage } = require("async_hooks");
 
 const memoryStorage = new AsyncLocalStorage();
-const express = require("express");
 const dotenv = require("dotenv");
 dotenv.config({ override: true });
 
-const app = express();
 const PORT = process.env.PORT || 3000;
 
 const MEMORY_DIR = path.resolve(
@@ -56,7 +60,240 @@ function getMemoryPaths() {
         backup: file + ".backup"
     };
 }
+// ==========================================
+// ZENIX USER CHAT HISTORY SYSTEM
+// ==========================================
 
+function getHistoryPaths() {
+    const store = memoryStorage.getStore();
+    const userId = store?.userId;
+
+    if (
+        typeof userId !== "string" ||
+        !/^USER_\d{3,}$/.test(userId)
+    ) {
+        throw new Error("USER_HISTORY_CONTEXT_REQUIRED");
+    }
+
+    const directory = path.join(USERS_DIR, userId);
+
+    return {
+        directory,
+        file: path.join(directory, "history.json"),
+        temp: path.join(directory, "history.json.tmp")
+    };
+}
+
+// ==========================================
+// LOAD USER HISTORY
+// ==========================================
+
+function loadUserHistory() {
+    try {
+        const paths = getHistoryPaths();
+
+        if (!fs.existsSync(paths.file)) {
+            fs.writeFileSync(
+                paths.file,
+                "[]",
+                "utf8"
+            );
+
+            return [];
+        }
+
+        const history = JSON.parse(
+            fs.readFileSync(paths.file, "utf8")
+        );
+
+        return Array.isArray(history) ? history : [];
+
+    } catch (error) {
+        console.error(
+            "ZENIX HISTORY LOAD ERROR:",
+            error.message
+        );
+
+        throw error;
+    }
+}
+
+
+// ==========================================
+// SAVE USER HISTORY
+// ==========================================
+function saveUserHistory(history) {
+    try {
+        if (!Array.isArray(history)) {
+            throw new Error("INVALID_HISTORY");
+        }
+
+        const paths = getHistoryPaths();
+
+        const safeHistory = history
+            .filter(item =>
+                item &&
+                ["user", "assistant"].includes(item.role) &&
+                typeof item.text === "string"
+            )
+            .slice(-500);
+
+        fs.mkdirSync(paths.directory, {
+            recursive: true
+        });
+
+        fs.writeFileSync(
+            paths.temp,
+            JSON.stringify(safeHistory, null, 4),
+            "utf8"
+        );
+
+        fs.renameSync(
+            paths.temp,
+            paths.file
+        );
+
+        return true;
+
+    } catch (error) {
+        console.error(
+            "ZENIX HISTORY SAVE ERROR:",
+            error.message
+        );
+
+        return false;
+    }
+}
+ // ==========================================
+// ZENIX CHAT ID GENERATOR
+// ==========================================
+
+function makeChatId() {
+    return crypto.randomUUID();
+}
+
+// ==========================================
+// ZENIX MULTI CHAT STORAGE
+// ==========================================
+
+function getUserChatsPaths() {
+    const store = memoryStorage.getStore();
+    const userId = store?.userId;
+
+    if (
+        typeof userId !== "string" ||
+        !/^USER_\d{3,}$/.test(userId)
+    ) {
+        throw new Error("USER_CHAT_CONTEXT_REQUIRED");
+    }
+
+    const userDirectory = path.join(USERS_DIR, userId);
+    const chatsDirectory = path.join(userDirectory, "chats");
+
+    return {
+        userDirectory,
+        chatsDirectory,
+        listFile: path.join(userDirectory, "chats.json")
+    };
+}
+
+ // ==========================================
+// ZENIX LOAD USER CHATS
+// ==========================================
+
+function loadUserChats() {
+    try {
+        const paths = getUserChatsPaths();
+
+        fs.mkdirSync(paths.userDirectory, {
+            recursive: true
+        });
+
+        fs.mkdirSync(paths.chatsDirectory, {
+            recursive: true
+        });
+
+        if (!fs.existsSync(paths.listFile)) {
+            fs.writeFileSync(
+                paths.listFile,
+                "[]",
+                "utf8"
+            );
+
+            return [];
+        }
+
+        const chats = JSON.parse(
+            fs.readFileSync(paths.listFile, "utf8")
+        );
+
+        return Array.isArray(chats) ? chats : [];
+
+    } catch (error) {
+        console.error(
+            "ZENIX CHATS LOAD ERROR:",
+            error.message
+        );
+
+        throw error;
+    }
+}
+
+
+// ==========================================
+// ZENIX SAVE USER CHATS
+// ==========================================
+
+function saveUserChats(chats) {
+    try {
+        if (!Array.isArray(chats)) {
+            throw new Error("INVALID_CHATS");
+        }
+
+        const paths = getUserChatsPaths();
+
+        fs.mkdirSync(paths.userDirectory, {
+            recursive: true
+        });
+
+        const safeChats = chats
+            .filter(chat =>
+                chat &&
+                typeof chat.id === "string" &&
+                /^[A-Za-z0-9_-]{8,64}$/.test(chat.id) &&
+                typeof chat.title === "string"
+            )
+            .map(chat => ({
+                id: chat.id,
+                title: chat.title.slice(0, 100),
+                createdAt: chat.createdAt || new Date().toISOString(),
+                updatedAt: chat.updatedAt || new Date().toISOString()
+            }));
+
+        const tempFile = paths.listFile + ".tmp";
+
+        fs.writeFileSync(
+            tempFile,
+            JSON.stringify(safeChats, null, 4),
+            "utf8"
+        );
+
+        fs.renameSync(
+            tempFile,
+            paths.listFile
+        );
+
+        return true;
+
+    } catch (error) {
+        console.error(
+            "ZENIX CHATS SAVE ERROR:",
+            error.message
+        );
+
+        return false;
+    }
+}
 
 const GEMINI_MODEL =
     process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
@@ -485,7 +722,6 @@ function userMemoryContext(req, res, next) {
     try {
         const userId = req.user?.userId;
 
-        // Միայն ճիշտ ձևաչափով ID
         if (
             typeof userId !== "string" ||
             !/^USER_\d{3,}$/.test(userId)
@@ -495,7 +731,6 @@ function userMemoryContext(req, res, next) {
             });
         }
 
-        // Ստուգում ենք users.json-ը
         const users = loadUsers();
 
         const registeredUser = users.some(
@@ -508,7 +743,6 @@ function userMemoryContext(req, res, next) {
             });
         }
 
-        // Ստուգում ենք հենց այդ օգտատիրոջ պանակը
         const userDirectory = path.join(
             USERS_DIR,
             userId
@@ -538,7 +772,6 @@ function userMemoryContext(req, res, next) {
             });
         }
 
-        // Ստեղծում ենք տվյալ օգտատիրոջ կոնտեքստը
         memoryStorage.run(
             { userId },
             () => next()
@@ -555,7 +788,6 @@ function userMemoryContext(req, res, next) {
         });
     }
 }
-
 /* =====================================================
    AUTOMATIC USER REGISTRATION
 ===================================================== */
@@ -566,6 +798,67 @@ function userMemoryContext(req, res, next) {
 ===================================================== */
 
 // ՆՈՐ ՕԳՏԱՏԻՐՈՋ ԳՐԱՆՑՈՒՄ
+
+// ==========================================
+// ZENIX — CHAT HISTORY SYSTEM
+// ==========================================
+
+function getUserHistoryFile(userId) {
+    if (!/^USER_\d+$/.test(userId)) {
+        throw new Error("INVALID_USER_ID");
+    }
+
+    const userDirectory = path.join(USERS_DIR, userId);
+
+    if (!fs.existsSync(userDirectory)) {
+        throw new Error("USER_DIRECTORY_NOT_FOUND");
+    }
+
+    return path.join(userDirectory, "history.json");
+}
+
+// Կարդալ օգտատիրոջ զրույցների պատմությունը
+function loadUserHistory(userId) {
+    const historyFile = getUserHistoryFile(userId);
+
+    if (!fs.existsSync(historyFile)) {
+        fs.writeFileSync(historyFile, "[]", "utf8");
+    }
+
+    const history = JSON.parse(
+        fs.readFileSync(historyFile, "utf8")
+    );
+
+    if (!Array.isArray(history)) {
+        throw new Error("INVALID_HISTORY_FILE");
+    }
+
+    return history;
+}
+
+
+
+// Պահպանել օգտատիրոջ զրույցների պատմությունը
+function saveUserHistory(userId, history) {
+    if (!Array.isArray(history)) {
+        throw new Error("INVALID_HISTORY_DATA");
+    }
+
+    const historyFile = getUserHistoryFile(userId);
+
+    const tempFile = historyFile + ".tmp";
+
+    fs.writeFileSync(
+        tempFile,
+        JSON.stringify(history, null, 4),
+        "utf8"
+    );
+
+    fs.renameSync(tempFile, historyFile);
+
+    return true;
+}
+
 app.post("/api/register", (req, res) => {
     try {
         const { name, email, password } = req.body || {};
@@ -888,8 +1181,6 @@ function armenianTransliterate(value) {
 }
 
 
-
-
 function normalizePreferenceItem(item) {
     const original = String(item || "").trim();
 
@@ -929,25 +1220,6 @@ function normalizePreferenceItem(item) {
 
 
 
-function emptyMemory() {
-    return {
-        facts: [],
-        preferences: [],
-        interests: [],
-        devices: [],
-
-        // ZENIX MEMORY 2.0
-        goals: [],
-        projects: [],
-        games: [],
-        tasks: [],
-
-        user_name: "",
-        youtube_channel: "",
-        pending_memory: null
-    };
-}
-
 function normalizeText(value) {
     return armenianTransliterate(String(value || ""))
         .toLowerCase()
@@ -956,6 +1228,67 @@ function normalizeText(value) {
         .replace(/\s+/gu, " ")
         .trim();
 }
+
+
+/* =====================================================
+   MEMORY DIRECTORY
+===================================================== */
+
+/* =====================================================
+   MEMORY DIRECTORY
+===================================================== */
+function createMemoryBackup() {
+    const paths = getMemoryPaths();
+
+    try {
+        fs.mkdirSync(paths.directory, { recursive: true });
+
+        if (!fs.existsSync(paths.file)) return true;
+
+        const current = fs.readFileSync(paths.file, "utf8");
+        JSON.parse(current);
+
+        fs.copyFileSync(paths.file, paths.backup);
+
+        return true;
+
+    } catch (error) {
+        console.error("MEMORY BACKUP ERROR:", error.message);
+        return false;
+    }
+}
+
+/* =====================================================
+   MEMORY BACKUP
+===================================================== */
+
+/* =====================================================
+   SAVE MEMORY
+===================================================== */
+
+function ensureMemoryDirectory() {
+    try {
+        fs.mkdirSync(MEMORY_DIR, {
+            recursive: true
+        });
+
+        return fs.statSync(MEMORY_DIR).isDirectory();
+    } catch (error) {
+        console.error(
+            "MEMORY DIRECTORY ERROR:",
+            error.message
+        );
+
+        return false;
+    }
+}
+
+
+
+
+
+
+
 
 
 /* =====================================================
@@ -1107,47 +1440,52 @@ function saveMemory(memory) {
 
 
 
+
 function removeMemoryItem(
     memory,
     collection,
     value
 ) {
-const target = collection === "games"
-    ? normalizeGame(value)
-    : normalizeText(
-        collection === "preferences"
-            ? normalizePreferenceItem(value)
-            : value
-    );
+    const allowedCollections = [
+        "facts",
+        "preferences",
+        "interests",
+        "devices",
+        "goals",
+        "projects",
+        "games",
+        "tasks"
+    ];
 
-if (!target) return false;
+    if (
+        !memory ||
+        !allowedCollections.includes(collection) ||
+        !Array.isArray(memory[collection])
+    ) {
+        return false;
+    }
 
-const oldLength = memory[collection].length;
+    const normalizeItem = item => {
+        if (collection === "games") {
+            return normalizeText(normalizeGame(item));
+        }
 
-memory[collection] = memory[collection].filter(item => {
-    const normalized = collection === "games"
-        ? normalizeGame(item)
-        : normalizeText(
-            collection === "preferences"
-                ? normalizePreferenceItem(item)
-                : item
-        );
+        if (collection === "preferences") {
+            return normalizeText(normalizePreferenceItem(item));
+        }
 
-    return normalized !== target;
-});
+        return normalizeText(item);
+    };
+
+    const target = normalizeItem(value);
 
     if (!target) return false;
 
+    const oldLength = memory[collection].length;
 
-    memory[collection] = memory[collection].filter(item => {
-        const normalized = normalizeText(
-            collection === "preferences"
-                ? normalizePreferenceItem(item)
-                : item
-        );
-
-        return normalized !== target;
-    });
+    memory[collection] = memory[collection].filter(
+        item => normalizeItem(item) !== target
+    );
 
     if (memory[collection].length === oldLength) {
         return "not_found";
@@ -1167,6 +1505,7 @@ memory[collection] = memory[collection].filter(item => {
 
     return true;
 }
+
 
 
 /* =====================================================
@@ -1408,20 +1747,80 @@ const normalized = collection === "tasks"
    PREFERENCE CATEGORY
 ===================================================== */
 
-function normalizeMemory(raw) {
-    const defaults = emptyMemory();
 
-    const source =
-        raw &&
-        typeof raw === "object" &&
-        !Array.isArray(raw)
-            ? raw
-            : {};
+function normalizePreferenceItem(item) {
+    const original = String(item || "").trim();
 
-    const memory = {
-        ...defaults,
-        ...source
+    if (!original) return "";
+
+    if (original.includes(":")) {
+        const parts = original.split(":");
+        const category = normalizePreferenceCategory(
+            parts.shift()
+        );
+        const value = parts.join(":").trim();
+
+        if (!category || !value) return original;
+
+        return `${category}: ${value}`;
+    }
+
+    const match = original.match(
+        /^(?:իմ\s+)?սիրելի\s+(միրգյ?|մրգ|սպորտաձև|սպորտաձեվ|սպորտ|կենդանի|կենդանին|մեքենա|գույն)\s*(?:՝|:|-)?\s*(.+?)\s+է$/iu
+    );
+
+    if (!match) return original;
+
+    const category = normalizePreferenceCategory(
+        match[1]
+    );
+
+    let value = match[2].trim();
+
+    if (category === "կենդանի") {
+        value = value.replace(/ն$/u, "");
+    }
+
+    if (category === "միրգ") {
+        value = value.replace(/ը$/u, "");
+    }
+
+    if (!category || !value) return original;
+
+    return `${category}: ${value}`;
+}
+
+
+function emptyMemory() {
+    return {
+        facts: [],
+        preferences: [],
+        interests: [],
+        devices: [],
+        goals: [],
+        projects: [],
+        games: [],
+        tasks: [],
+        user_name: "",
+        youtube_channel: "",
+        pending_memory: null
     };
+}
+
+
+
+function normalizeMemory(memory) {
+    const empty = emptyMemory();
+
+    if (
+        !memory ||
+        typeof memory !== "object" ||
+        Array.isArray(memory)
+    ) {
+        return empty;
+    }
+
+    const safeMemory = {};
 
     const collections = [
         "facts",
@@ -1435,31 +1834,117 @@ function normalizeMemory(raw) {
     ];
 
     for (const collection of collections) {
-        if (!Array.isArray(source[collection])) {
-            memory[collection] = [];
-            continue;
+        const items = Array.isArray(memory[collection])
+            ? memory[collection]
+            : [];
+
+        const normalizedItems = [];
+        const seen = new Set();
+
+        for (const item of items) {
+            if (typeof item !== "string") continue;
+
+            const value = item.trim();
+
+            if (!value || isSensitiveMemory(value)) {
+                continue;
+            }
+
+            let normalized;
+
+            if (collection === "preferences") {
+                normalized = normalizePreferenceItem(value);
+            } else if (collection === "games") {
+                normalized = normalizeGame(value);
+            } else {
+                normalized = value;
+            }
+
+            if (
+                typeof normalized !== "string" ||
+                !normalized.trim() ||
+                isSensitiveMemory(normalized.trim())
+            ) {
+                continue;
+            }
+
+            const cleanValue = normalized.trim();
+            const duplicateKey = normalizeText(cleanValue);
+
+            if (!duplicateKey || seen.has(duplicateKey)) {
+                continue;
+            }
+
+            seen.add(duplicateKey);
+            normalizedItems.push(cleanValue);
         }
 
-        memory[collection] = source[collection]
-            .filter(item => typeof item === "string")
-            .map(item => item.trim())
-            .filter(Boolean);
+        safeMemory[collection] = normalizedItems;
     }
 
-    memory.preferences = memory.preferences.map(
-        normalizePreferenceItem
-    );
+    safeMemory.user_name =
+        typeof memory.user_name === "string" &&
+        memory.user_name.trim() &&
+        !isSensitiveMemory(memory.user_name.trim())
+            ? memory.user_name.trim()
+            : "";
 
-    memory.user_name = String(source.user_name || "");
-    memory.youtube_channel = String(
-        source.youtube_channel || ""
-    );
+    safeMemory.youtube_channel =
+        typeof memory.youtube_channel === "string" &&
+        memory.youtube_channel.trim() &&
+        !isSensitiveMemory(memory.youtube_channel.trim())
+            ? memory.youtube_channel.trim()
+            : "";
 
-    memory.pending_memory =
-        source.pending_memory ?? null;
+    const pending = memory.pending_memory;
 
-    return memory;
+    const validPending =
+        pending &&
+        typeof pending === "object" &&
+        !Array.isArray(pending) &&
+        typeof pending.type === "string" &&
+        pending.type.trim() &&
+        typeof pending.value === "string" &&
+        pending.value.trim() &&
+        !isSensitiveMemory(pending.value.trim()) &&
+        (
+            pending.category === null ||
+            (
+                typeof pending.category === "string" &&
+                pending.category.trim()
+            )
+        ) &&
+        typeof pending.confidence === "number" &&
+        Number.isFinite(pending.confidence) &&
+        typeof pending.createdAt === "number" &&
+        Number.isFinite(pending.createdAt);
+
+    if (validPending) {
+        safeMemory.pending_memory = {
+            type: pending.type.trim(),
+            category: pending.category,
+            value: pending.value.trim(),
+            confidence: pending.confidence,
+            createdAt: pending.createdAt
+        };
+    } else {
+        safeMemory.pending_memory = null;
+    }
+
+    return safeMemory;
 }
+
+
+
+function normalizeText(value) {
+    return armenianTransliterate(String(value || ""))
+        .toLowerCase()
+        .normalize("NFC")
+        .replace(/[։.,!?՝'"]/gu, "")
+        .replace(/\s+/gu, " ")
+        .trim();
+}
+
 
 
 function normalizePreferenceCategory(value) {
@@ -3123,153 +3608,268 @@ ${memory.devices.join("\n")}
    API CHAT
 ===================================================== */
 
+
 app.post(
     "/api/chat",
     requireAuth,
     userMemoryContext,
     async (req, res) => {
-    try {
-        const { history } = req.body;
+        try {
+            const { history } = req.body;
+            const userId = req.user.userId;
 
-        if (!Array.isArray(history)) {
-            return res.status(400).json({
-                error: "History must be an array."
-            });
-        }
+            if (!Array.isArray(history)) {
+                return res.status(400).json({
+                    error: "History must be an array."
+                });
+            }
 
-        const lastMessage = [...history]
-            .reverse()
-            .find(item => item && item.role === "user");
+            const lastMessage = [...history]
+                .reverse()
+                .find(item => item && item.role === "user");
 
-        const userMessage = String(
-            lastMessage?.text || ""
-        ).trim();
+            const userMessage = String(
+                lastMessage?.text || ""
+            ).trim();
 
-        if (!userMessage) {
-            return res.status(400).json({
-                error: "Message is empty."
-            });
-        }
+            if (!userMessage) {
+                return res.status(400).json({
+                    error: "Message is empty."
+                });
+            }
 
-        console.log("ZENIX USER:", userMessage);
+            // Պահպանում ենք օգտատիրոջ հաղորդագրությունների պատմությունը
+            console.log("HISTORY DEBUG:", {
+    userId,
+    historyIsArray: Array.isArray(history),
+    historyType: typeof history,
+    historyValue: history
+});
+            if (!saveUserHistory(userId, history)) {
+                return res.status(500).json({
+                    error: "HISTORY_SAVE_FAILED"
+                });
+            }
 
-        let memory = loadMemory();
+            // Պահպանում ենք նաև ZENIX-ի պատասխանը
+            const originalJson = res.json.bind(res);
 
-        /* ======================================
-           1. PENDING CONFIRMATION
-        ====================================== */
+            res.json = function (data) {
+                if (
+                    data &&
+                    typeof data.reply === "string" &&
+                    data.reply.trim()
+                ) {
+                    const updatedHistory = [
+                        ...history,
+                        {
+                            role: "assistant",
+                            text: data.reply
+                        }
+                    ];
 
-        const confirmation =
-            handleMemoryConfirmation(userMessage);
+                    try {
+                        saveUserHistory(userId, updatedHistory);
+                    } catch (error) {
+                        console.error(
+                            "ZENIX ASSISTANT HISTORY SAVE FAILED:",
+                            error
+                        );
+                    }
+                }
 
-        if (confirmation === "saved") {
-            return res.json({
-                reply: "Լավ, պահպանեցի այս տեղեկությունը հիշողությանս մեջ։ ❤️"
-            });
-        }
+                return originalJson(data);
+            };
 
-        if (confirmation === "exists") {
-            return res.json({
-                reply: "Այս տեղեկությունն արդեն հիշում եմ։ ❤️"
-            });
-        }
+            console.log("ZENIX USER:", userMessage);
 
-        if (confirmation === "cancelled") {
-            return res.json({
-                reply: "Լավ, այս տեղեկությունը չեմ պահպանի։ ❤️"
-            });
-        }
+            let memory = loadMemory();
 
-        if (confirmation === "error") {
-            return res.json({
-                reply: "Չհաջողվեց պահպանել տեղեկությունը։"
-            });
-        }
+            // ======================================
+            // 1. PENDING CONFIRMATION
+            // ======================================
 
-        /* ======================================
-           2. FORGET COMMANDS
-        ====================================== */
+            const confirmation =
+                handleMemoryConfirmation(userMessage);
 
-  
-/* ======================================
-   2. FORGET COMMANDS
-====================================== */
+            if (confirmation === "saved") {
+                return res.json({
+                    reply: "Լավ, պահպանեցի այս տեղեկությունը հիշողությանս մեջ։ ❤️"
+                });
+            }
 
-const forgetResult = await forgetFact(userMessage);
+            if (confirmation === "exists") {
+                return res.json({
+                    reply: "Այս տեղեկությունն արդեն հիշում եմ։ ❤️"
+                });
+            }
 
-if (forgetResult === true) {
-    return res.json({
-        reply: "Հաջողությամբ մոռացա և ջնջեցի այդ տեղեկությունը։ ❤️"
-    });
-}
+            if (confirmation === "cancelled") {
+                return res.json({
+                    reply: "Լավ, այս տեղեկությունը չեմ պահպանի։ ❤️"
+                });
+            }
 
-if (forgetResult === "all") {
-    return res.json({
-        reply: "Հիշողությանս ամբողջ տեղեկությունը ջնջեցի։ ❤️"
-    });
-}
+            if (confirmation === "error") {
+                return res.json({
+                    reply: "Չհաջողվեց պահպանել տեղեկությունը։"
+                });
+            }
 
-if (forgetResult === "not_found") {
-    return res.json({
-        reply: "Այդ տեղեկությունը հիշողությանս մեջ չգտա։"
-    });
-}
+            // ======================================
+            // 2. FORGET COMMANDS
+            // ======================================
 
-if (forgetResult === "error") {
-    return res.json({
-        reply: "Չհաջողվեց ջնջել տեղեկությունը։"
-    });
-}
+            const forgetResult = await forgetFact(userMessage);
 
-        /* ======================================
-           3. FUTURE PREFERENCE
-        ====================================== */
+            if (forgetResult === true) {
+                return res.json({
+                    reply: "Հաջողությամբ մոռացա և ջնջեցի այդ տեղեկությունը։ ❤️"
+                });
+            }
 
-        if (updateFuturePreference(userMessage)) {
-            return res.json({
-                reply: "Հիշողությունս հաջողությամբ թարմացրի։ ❤️"
-            });
-        }
+            if (forgetResult === "all") {
+                return res.json({
+                    reply: "Հիշողությանս ամբողջ տեղեկությունը ջնջեցի։ ❤️"
+                });
+            }
 
-        /* ======================================
-           4. EXPLICIT REMEMBER COMMAND
-        ====================================== */
-const normalizedUserMessage =
-    armenianTransliterate(userMessage);
+            if (forgetResult === "not_found") {
+                return res.json({
+                    reply: "Այդ տեղեկությունը հիշողությանս մեջ չգտա։"
+                });
+            }
 
-if (hasRememberCommand(normalizedUserMessage)) {
-    const cleanMessage =
-        cleanRememberCommand(userMessage);
+            if (forgetResult === "error") {
+                return res.json({
+                    reply: "Չհաջողվեց ջնջել տեղեկությունը։"
+                });
+            }
 
-            const detected =
-                await analyzeMemoryWithGemini(cleanMessage);
+            // ======================================
+            // 3. FUTURE PREFERENCE
+            // ======================================
 
-            if (detected) {
-                if (detected.confidence >= 0.90) {
-                    const currentMemory = loadMemory();
+            if (updateFuturePreference(userMessage)) {
+                return res.json({
+                    reply: "Հիշողությունս հաջողությամբ թարմացրի։ ❤️"
+                });
+            }
 
-                    const result = saveDetectedMemory(
-                        currentMemory,
-                        detected
-                    );
+            // ======================================
+            // 4. EXPLICIT REMEMBER COMMAND
+            // ======================================
 
-                    if (
-                        result === "saved" ||
-                        result === true
-                    ) {
-                        return res.json({
-                            reply: saveMemory(currentMemory)
-                                ? "Հիշեցի և պահպանեցի հիշողությանս մեջ։ ❤️"
-                                : "Չհաջողվեց պահպանել տեղեկությունը։"
-                        });
+            const normalizedUserMessage =
+                armenianTransliterate(userMessage);
+
+            if (hasRememberCommand(normalizedUserMessage)) {
+                const cleanMessage =
+                    cleanRememberCommand(userMessage);
+
+                const detected =
+                    await analyzeMemoryWithGemini(cleanMessage);
+
+                if (detected) {
+                    if (detected.confidence >= 0.90) {
+                        const currentMemory = loadMemory();
+
+                        const result = saveDetectedMemory(
+                            currentMemory,
+                            detected
+                        );
+
+                        if (
+                            result === "saved" ||
+                            result === true
+                        ) {
+                            return res.json({
+                                reply: saveMemory(currentMemory)
+                                    ? "Հիշեցի և պահպանեցի հիշողությանս մեջ։ ❤️"
+                                    : "Չհաջողվեց պահպանել տեղեկությունը։"
+                            });
+                        }
+
+                        if (result === "exists") {
+                            return res.json({
+                                reply: "Այս տեղեկությունն արդեն հիշում եմ։ ❤️"
+                            });
+                        }
                     }
 
-                    if (result === "exists") {
+                    if (setPendingMemory(detected)) {
                         return res.json({
-                            reply: "Այս տեղեկությունն արդեն հիշում եմ։ ❤️"
+                            reply: `Ցանկանո՞ւմ ես, որ հիշեմ՝ ${detected.value}։ ❤️`
                         });
                     }
                 }
+
+                return res.json({
+                    reply: "Չկարողացա հստակ հասկանալ՝ ինչ տեղեկություն պահպանեմ։"
+                });
+            }
+
+            // ======================================
+            // 5. MEMORY QUESTIONS
+            // ======================================
+
+            memory = loadMemory();
+
+            console.log("ZENIX MEMORY GAMES:", memory.games);
+            console.log("ZENIX USER QUESTION:", userMessage);
+
+            console.log(
+                "USER MEMORY BEFORE ANSWER:",
+                JSON.stringify(memory, null, 2)
+            );
+
+            console.log("USER PREFERENCES:", memory?.preferences);
+
+            const memoryAnswer = getMemoryAnswer(
+                memory,
+                "Armenian",
+                userMessage
+            );
+
+            console.log("ZENIX MEMORY ANSWER:", memoryAnswer);
+
+            if (memoryAnswer) {
+                return res.json({
+                    reply: memoryAnswer
+                });
+            }
+
+            // ======================================
+            // 6. AUTOMATIC MEMORY
+            // ======================================
+
+            console.log("MEMORY TEST MESSAGE:", userMessage);
+
+            const automaticMemory =
+                await saveAutomaticMemory(userMessage);
+
+            console.log(
+                "MEMORY TEST RESULT:",
+                automaticMemory
+            );
+
+            if (automaticMemory === "saved") {
+                return res.json({
+                    reply: "Հասկացա և պահպանեցի հիշողությանս մեջ։ ❤️"
+                });
+            }
+
+            if (automaticMemory === "exists") {
+                return res.json({
+                    reply: "Այս տեղեկությունն արդեն հիշում եմ։ ❤️"
+                });
+            }
+
+            if (
+                automaticMemory &&
+                automaticMemory.status === "confirmation"
+            ) {
+                const detected = automaticMemory.detected;
 
                 if (setPendingMemory(detected)) {
                     return res.json({
@@ -3278,104 +3878,35 @@ if (hasRememberCommand(normalizedUserMessage)) {
                 }
             }
 
+            if (automaticMemory === false) {
+                console.log("MEMORY NOT SAVED");
+            }
+
+            // ======================================
+            // 7. GEMINI CHAT
+            // ======================================
+
+            memory = loadMemory();
+
+            const answer = await askGemini(
+                history,
+                memory
+            );
+
             return res.json({
-                reply: "Չկարողացա հստակ հասկանալ՝ ինչ տեղեկություն պահպանեմ։"
+                reply: answer
+            });
+
+        } catch (error) {
+            console.error("ZENIX CHAT ERROR:", error);
+
+            return res.status(500).json({
+                error: error.message || "Internal server error"
             });
         }
-
-        /* ======================================
-           5. MEMORY QUESTIONS
-        ====================================== */
-
-        memory = loadMemory();
-
-console.log("ZENIX MEMORY GAMES:", memory.games);
-console.log("ZENIX USER QUESTION:", userMessage);
-console.log(
-    "USER MEMORY BEFORE ANSWER:",
-    JSON.stringify(memory, null, 2)
-);
-console.log("USER MEMORY BEFORE ANSWER:", memory);
-console.log("USER PREFERENCES:", memory?.preferences);
-const memoryAnswer = getMemoryAnswer(
-    memory,
-    "Armenian",
-    userMessage
-);
-
-console.log("ZENIX MEMORY ANSWER:", memoryAnswer);
-
-if (memoryAnswer) {
-    return res.json({
-        reply: memoryAnswer
-    });
-}
-
-        /* ======================================
-           6. AUTOMATIC MEMORY  
-         ======================================*/
-
-        console.log("MEMORY TEST MESSAGE:", userMessage);
-
-const automaticMemory =
-    await saveAutomaticMemory(userMessage);
-
-console.log(
-    "MEMORY TEST RESULT:",
-    automaticMemory
-);
-
-if (automaticMemory === "saved") {
-    return res.json({
-        reply: "Հասկացա և պահպանեցի հիշողությանս մեջ։ ❤️"
-    });
-}
-
-if (automaticMemory === "exists") {
-    return res.json({
-        reply: "Այս տեղեկությունն արդեն հիշում եմ։ ❤️"
-    });
-}
-
-if (
-    automaticMemory &&
-    automaticMemory.status === "confirmation"
-) {
-    const detected = automaticMemory.detected;
-
-    if (setPendingMemory(detected)) {
-        return res.json({
-            reply: `Ցանկանո՞ւմ ես, որ հիշեմ՝ ${detected.value}։ ❤️`
-        });
     }
-}
+);
 
-if (automaticMemory === false) {
-    console.log("MEMORY NOT SAVED");
-}
-        /* ======================================
-           7. GEMINI CHAT
-        ====================================== */
-
-        memory = loadMemory();
-
-        const answer = await askGemini(
-            history,
-            memory
-        );
-
-        return res.json({
-            reply: answer
-        });
-
-    } catch (error) {
-        console.error("ZENIX CHAT ERROR:", error);
-
-        return res.status(500).json({
-            error: error.message || "Internal server error"
-        });
-    }
-});
 
 /* =====================================================
    MEMORY STATUS
@@ -3428,3 +3959,168 @@ app.listen(PORT, () => {
         GEMINI_MODEL
     );
 });
+// ==========================================
+// GET USER CHAT HISTORY
+// ==========================================
+
+app.get(
+    "/api/history",
+    requireAuth,
+    userMemoryContext,
+    (req, res) => {
+        try {
+            const history = loadUserHistory();
+
+            return res.json({
+                success: true,
+                history
+            });
+
+        } catch (error) {
+            console.error(
+                "HISTORY API ERROR:",
+                error.message
+            );
+
+            return res.status(500).json({
+                success: false,
+                error: "HISTORY_LOAD_FAILED"
+            });
+        }
+    }
+);
+
+ // ==========================================
+// ZENIX CREATE NEW CHAT API
+// ==========================================
+
+app.post(
+    "/api/chats",
+    requireAuth,
+    userMemoryContext,
+    (req, res) => {
+        let chatFile = null;
+
+        try {
+            const chats = loadUserChats();
+
+            const chatId = makeChatId();
+            const now = new Date().toISOString();
+
+            const newChat = {
+                id: chatId,
+                title: "Նոր զրույց",
+                createdAt: now,
+                updatedAt: now
+            };
+
+            const paths = getUserChatsPaths();
+
+            chatFile = path.join(
+                paths.chatsDirectory,
+                chatId + ".json"
+            );
+
+            fs.writeFileSync(
+                chatFile,
+                "[]",
+                "utf8"
+            );
+
+            chats.unshift(newChat);
+
+            if (!saveUserChats(chats)) {
+                fs.unlinkSync(chatFile);
+
+                return res.status(500).json({
+                    success: false,
+                    error: "CHAT_CREATE_FAILED"
+                });
+            }
+
+            return res.json({
+                success: true,
+                chat: newChat
+            });
+
+        } catch (error) {
+            if (chatFile && fs.existsSync(chatFile)) {
+                fs.unlinkSync(chatFile);
+            }
+
+            console.error(
+                "ZENIX CREATE CHAT ERROR:",
+                error.message
+            );
+
+            return res.status(500).json({
+                success: false,
+                error: "CHAT_CREATE_FAILED"
+            });
+        }
+    }
+);
+
+// ==========================================
+// ZENIX CREATE NEW CHAT
+// ==========================================
+
+app.post(
+    "/api/chats",
+    requireAuth,
+    userMemoryContext,
+    (req, res) => {
+        try {
+            const chats = loadUserChats();
+
+            const chatId = makeChatId();
+
+            const now = new Date().toISOString();
+
+            const newChat = {
+                id: chatId,
+                title: "Նոր զրույց",
+                createdAt: now,
+                updatedAt: now
+            };
+
+            chats.unshift(newChat);
+
+            if (!saveUserChats(chats)) {
+                return res.status(500).json({
+                    success: false,
+                    error: "CHAT_CREATE_FAILED"
+                });
+            }
+
+            const paths = getUserChatsPaths();
+
+            const chatFile = path.join(
+                paths.chatsDirectory,
+                chatId + ".json"
+            );
+
+            fs.writeFileSync(
+                chatFile,
+                "[]",
+                "utf8"
+            );
+
+            return res.json({
+                success: true,
+                chat: newChat
+            });
+
+        } catch (error) {
+            console.error(
+                "ZENIX CREATE CHAT ERROR:",
+                error.message
+            );
+
+            return res.status(500).json({
+                success: false,
+                error: "CHAT_CREATE_FAILED"
+            });
+        }
+    }
+);
